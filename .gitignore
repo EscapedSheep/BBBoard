@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+xcuserdata/
+.DS_Store
+
+# 内部文档不进仓库（本地留存）
+HANDOVER.md
+MVP 实施计划.md
+项目概念：Desktop AI Board.md
