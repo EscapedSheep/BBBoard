@@ -9,15 +9,16 @@ final class BoardApplication: NSApplication {
         weak var panel: NSPanel?
         let dragZoneHeight: @MainActor () -> CGFloat
         let onDragBegin: @MainActor () -> Void
-        let onDragEnd: @MainActor () -> Void
     }
 
     var desktopDragInterception: DragInterception?
 
     override func sendEvent(_ event: NSEvent) {
         // 桌面挂板：命中头部拖拽区域的 leftMouseDown 直接转系统原生拖拽。
-        // performDrag 接受首击（文档行为），自带模态事件循环，松手后返回；
-        // 在这里调用等价于在 mouseDown 里调用（NSWindow 内部即如此），无重入问题。
+        // performDrag 接受首击（文档行为）。
+        // macOS 26 起 performDrag 是异步的：启动 WindowServer 拖拽后立刻返回，
+        // 窗口移动在其返回之后才发生——拖拽结束（松手）由 DesktopPanelController
+        // 轮询 pressedMouseButtons 判定，这里不再同步回调 onDragEnd。
         if event.type == .leftMouseDown,
            let interception = desktopDragInterception,
            let panel = interception.panel,
@@ -29,7 +30,6 @@ final class BoardApplication: NSApplication {
                 interception.onDragBegin()
                 NSLog("BoardApp[desktop]: drag via performDrag start")
                 panel.performDrag(with: event)
-                interception.onDragEnd()
                 return // 事件已消费，不走正常分发
             }
         }
