@@ -28,7 +28,12 @@ final class SettingsController: NSObject {
         let settingsView = SettingsView(settings: .shared) { [weak self] enabled in
             self?.onHotkeyToggle?(enabled)
         }
-        panel.contentViewController = NSHostingController(rootView: settingsView)
+        let hosting = NSHostingController(rootView: settingsView)
+        panel.contentViewController = hosting
+        // macOS 26：经 contentViewController 安装的 NSHostingView 初始 frame 是 0×0，
+        // 不补 frame 窗口就是一片空白（实测复现）；autoresizingMask 跟随后续尺寸变化
+        hosting.view.frame = NSRect(origin: .zero, size: NSSize(width: 340, height: 280))
+        hosting.view.autoresizingMask = [.width, .height]
 
         NotificationCenter.default.addObserver(
             self,
