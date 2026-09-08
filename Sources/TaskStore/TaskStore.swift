@@ -265,6 +265,42 @@ public final class TaskStore: Sendable {
         }
     }
 
+    // MARK: - Projects（M4 任务成组）
+
+    @discardableResult
+    public func createProject(name: String, at now: Date = Date()) throws -> Project {
+        var project = Project(id: nil, name: name, createdAt: now)
+        try dbQueue.write { db in
+            try project.insert(db)
+        }
+        return project
+    }
+
+    /// 全部项目，按 name 排序。
+    public func projects() throws -> [Project] {
+        try dbQueue.read { db in
+            try Project.order(Column("name"), Column("id")).fetchAll(db)
+        }
+    }
+
+    public func project(id: Int64) throws -> Project? {
+        try dbQueue.read { db in try Project.fetchOne(db, id: id) }
+    }
+
+    /// 关联/解除任务的项目（projectId 为 nil 时解除）。无变化则不写库、不记日志；
+    /// 有变化时同事务更新 updated_at 并记一条 edited 日志（fields 含 project_id）。
+    public func assignTaskToProject(taskId: Int64, projectId: Int64?, at now: Date = Date()) throws {
+        try dbQueue.write { db in
+            guard var task = try Task.fetchOne(db, id: taskId) else { throw TaskStoreError.taskNotFound(taskId) }
+            guard task.projectId != projectId else { return }
+            task.projectId = projectId
+            task.updatedAt = now
+            try task.update(db)
+            let payload = Self.jsonPayload(["fields": "project_id"])
+            try Self.log(db, taskId: taskId, type: .edited, payload: payload, at: now)
+        }
+    }
+
     // MARK: - Daily Focus
 
     /// 最近 N 天每个任务的 activity 计数（activity_log 聚合）。

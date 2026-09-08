@@ -71,6 +71,24 @@ public struct Task: Codable, FetchableRecord, MutablePersistableRecord, Identifi
     }
 }
 
+/// projects 表记录：任务成组（M4）。
+public struct Project: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Sendable, Equatable {
+    public var id: Int64?
+    public var name: String
+    public var createdAt: Date
+
+    public static let databaseTableName = "projects"
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case createdAt = "created_at"
+    }
+
+    public mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+}
+
 /// activity_log 表记录。
 public struct ActivityLog: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Sendable, Equatable {
     public var id: Int64?
