@@ -31,10 +31,11 @@ final class SettingsController: NSObject {
         let hosting = NSHostingController(rootView: settingsView)
         panel.contentViewController = hosting
         // macOS 26：经 contentViewController 安装的 NSHostingView 初始 frame 是 0×0，
-        // 不补 frame 窗口就是一片空白（实测复现）。尺寸取 SwiftUI 内容的实测大小，
-        // 写死高度会在内容变高时裁掉控件；autoresizingMask 跟随后续尺寸变化。
-        let fitting = hosting.sizeThatFits(in: NSSize(width: 340, height: 2000))
-        let contentSize = NSSize(width: 340, height: max(fitting.height, 120))
+        // 不补 frame 窗口就是一片空白（实测复现）。尺寸取内容实测高度（Form 已声明
+        // 竖向 fixedSize，见 SettingsView），并以屏幕高度的 80% 封顶兜底。
+        let fitting = hosting.sizeThatFits(in: NSSize(width: 340, height: CGFloat.greatestFiniteMagnitude))
+        let maxHeight = (NSScreen.main?.visibleFrame.height ?? 900) * 0.8
+        let contentSize = NSSize(width: 340, height: min(max(fitting.height, 120), maxHeight))
         hosting.view.frame = NSRect(origin: .zero, size: contentSize)
         hosting.view.autoresizingMask = [.width, .height]
         panel.setContentSize(contentSize)
@@ -77,6 +78,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .padding()
         .frame(width: 340)
+        // 声明竖向固有尺寸：grouped Form 默认会吃满任何给定高度（实测 2000 上限被照单全收、
+        // 面板撑满整屏），fixedSize 后 sizeThatFits 才返回内容真实高度
+        .fixedSize(horizontal: false, vertical: true)
         .onChange(of: settings.hotkeyEnabled) { _, enabled in
             onHotkeyToggle(enabled)
         }
