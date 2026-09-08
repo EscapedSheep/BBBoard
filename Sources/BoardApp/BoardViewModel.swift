@@ -9,6 +9,8 @@ import TaskStore
 @Observable
 final class BoardViewModel {
     private let store: TaskStore
+    /// 用户可调阈值（M5 设置页）；派生数据（建议/Focus/清理）以此为准
+    let settings: AppSettings
 
     private(set) var tasks: [Task] = []
     private(set) var suggestions: [Suggestion] = []
@@ -30,8 +32,9 @@ final class BoardViewModel {
     private var lastBrainDumpRaw = ""
     private var lastAIOutputJSON = "[]"
 
-    init(store: TaskStore) {
+    init(store: TaskStore, settings: AppSettings = .shared) {
         self.store = store
+        self.settings = settings
         observeTasks()
     }
 
@@ -82,7 +85,7 @@ final class BoardViewModel {
         self.tasks = tasks
         let topLevel = tasks.filter { $0.parentId == nil }
         self.suggestions = RuleEngine
-            .suggestions(for: topLevel.map(\.snapshot), now: Date())
+            .suggestions(for: topLevel.map(\.snapshot), now: Date(), thresholds: settings.ruleThresholds)
             .filter { !dismissedSuggestionIDs.contains($0.id) }
         // 项目徽标用名查找表（表极小，随任务观察顺手刷新）
         self.projectNames = ((try? store.projects()) ?? []).reduce(into: [:]) { dict, project in
@@ -116,7 +119,7 @@ final class BoardViewModel {
             }
 
             let counts = try store.recentActivityCounts(days: FocusConfig.default.activityWindowDays)
-            let items = RuleEngine.focus(tasks: tasks.map(\.snapshot), activityCounts: counts, now: Date())
+            let items = RuleEngine.focus(tasks: tasks.map(\.snapshot), activityCounts: counts, now: Date(), config: settings.focusConfig)
             // M3 可选 LLM 重排挂点：此处可对 items 应用 FocusReranker（当前未启用）
             try store.saveFocusSnapshot(
                 day: today,
@@ -134,6 +137,11 @@ final class BoardViewModel {
         let today = Calendar.current.startOfDay(for: Date())
         guard focusDay != today else { return }
         recomputeFocus(topLevelTasks)
+    }
+
+    /// 设置（阈值/Focus 条数）变化后重算派生数据（建议 + Focus）。
+    func recomputeDerived() {
+        apply(tasks: tasks)
     }
 
     /// 点击 FOCUS 行：标记为进行中（最小可用交互）。
@@ -323,7 +331,7 @@ final class BoardViewModel {
         _Concurrency.Task { [weak self] in
             let pairs = await DuplicateDetector.findDuplicates(tasks: snapshots)
             guard let self else { return }
-            let stagnant = RuleEngine.stagnantTasks(for: snapshots)
+            let stagnant = RuleEngine.stagnantTasks(for: snapshots, config: settings.cleanupConfig)
             var proposals: [CleanupProposal] = pairs.map {
                 CleanupProposal(id: "dup-\($0.id)", kind: .duplicate($0))
             }

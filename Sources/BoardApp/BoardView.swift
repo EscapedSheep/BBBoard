@@ -82,6 +82,8 @@ struct BoardView: View {
         .onPreferenceChange(SectionsHeightKey.self) { sectionsHeight = $0; reportIdealHeight() }
         .onPreferenceChange(HeaderHeightKey.self) { desktopState?.headerHeight = $0 }
         .onAppear { viewModel.refreshFocusIfDayChanged() }
+        // 设置页调整阈值/Focus 条数后重算派生数据
+        .onChange(of: viewModel.settings.thresholdsSignature) { _, _ in viewModel.recomputeDerived() }
         .onChange(of: isCompact) { _, compact in
             reportIdealHeight()
             if !compact { viewModel.refreshFocusIfDayChanged() }
@@ -580,6 +582,13 @@ struct BoardView: View {
             sectionHeader(status)
             ForEach(viewModel.tasks(in: status)) { task in
                 taskRow(task)
+            }
+            if viewModel.tasks(in: status).isEmpty {
+                Text("拖任务到这里")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 8)
             }
             // 空列也保持完整拖放面积（HStack 内各列等高，由最高列撑开）
             Spacer(minLength: 48)
