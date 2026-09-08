@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var desktopController: DesktopPanelController?
     private var panelController: PanelController?
     private var hotKeyManager: HotKeyManager?
+    private var settingsController: SettingsController?
+    private let onboardingController = OnboardingController()
     private weak var desktopMenuItem: NSMenuItem?
     private weak var autoCollapseMenuItem: NSMenuItem?
 
@@ -44,10 +46,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
 
         let hotKey = HotKeyManager { [weak self] in self?.togglePanel() }
-        if !hotKey.register() {
+        hotKeyManager = hotKey
+        if AppSettings.shared.hotkeyEnabled, !hotKey.register() {
             NSLog("BoardApp: 全局快捷键 ⌥Space 注册失败，面板仍可从菜单栏打开")
         }
-        hotKeyManager = hotKey
+
+        let settings = SettingsController()
+        settings.onHotkeyToggle = { [weak self] enabled in
+            if enabled {
+                if self?.hotKeyManager?.register() == false {
+                    NSLog("BoardApp: 全局快捷键 ⌥Space 注册失败，面板仍可从菜单栏打开")
+                }
+            } else {
+                self?.hotKeyManager?.unregister()
+            }
+        }
+        settingsController = settings
+
+        onboardingController.showOnceIfNeeded()
     }
 
     /// 优先使用 Application Support，失败时回退到 ~/.bbboard-dev（已知开发路径）。
@@ -98,6 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openItem.target = self
         let cleanupItem = NSMenuItem(title: "智能清理…", action: #selector(smartCleanupAction), keyEquivalent: "")
         cleanupItem.target = self
+        let settingsItem = NSMenuItem(title: "设置…", action: #selector(showSettingsAction), keyEquivalent: "")
+        settingsItem.target = self
         let quitItem = NSMenuItem(title: "退出", action: #selector(quitAction), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(desktopItem)
@@ -105,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(loginItem)
         menu.addItem(openItem)
         menu.addItem(cleanupItem)
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
         item.menu = menu
@@ -140,6 +159,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func smartCleanupAction() {
         viewModel?.runSmartCleanup()
         panelController?.show()
+    }
+
+    @objc private func showSettingsAction() {
+        settingsController?.show()
     }
 
     @objc private func quitAction() { NSApp.terminate(nil) }
