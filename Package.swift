@@ -43,6 +43,10 @@ let package = Package(
         .testTarget(
             name: "AIParserTests",
             dependencies: ["AIParser", "RuleEngine"]
+        ),
+        .testTarget(
+            name: "BoardAppTests",
+            dependencies: ["BoardApp"]
         )
     ]
 )
