@@ -46,6 +46,7 @@ struct BoardView: View {
     @FocusState private var noteFieldFocused: Bool
     @FocusState private var subtaskFieldFocused: Bool
     @FocusState private var brainDumpFieldFocused: Bool
+    @FocusState private var cleanupNameFocused: Bool
 
     private let cornerRadius: CGFloat = 18
 
@@ -111,6 +112,7 @@ struct BoardView: View {
         .onChange(of: noteFieldFocused) { _, _ in syncFieldFocus() }
         .onChange(of: subtaskFieldFocused) { _, _ in syncFieldFocus() }
         .onChange(of: brainDumpFieldFocused) { _, _ in syncFieldFocus() }
+        .onChange(of: cleanupNameFocused) { _, _ in syncFieldFocus() }
         // 提案卡片被确认/丢弃时其焦点状态随之消失，清理残留 id 再补判
         .onChange(of: viewModel.proposals.map(\.id)) { _, ids in
             focusedProposalIDs.formIntersection(ids)
@@ -120,7 +122,7 @@ struct BoardView: View {
 
     /// 任一文本输入框（新建/重命名/说明/子任务/brain dump/提案卡片）聚焦都算"输入中"，抑制面板收起。
     private func syncFieldFocus() {
-        let focused = newTaskFieldFocused || editFieldFocused || noteFieldFocused || subtaskFieldFocused || brainDumpFieldFocused || !focusedProposalIDs.isEmpty
+        let focused = newTaskFieldFocused || editFieldFocused || noteFieldFocused || subtaskFieldFocused || brainDumpFieldFocused || cleanupNameFocused || !focusedProposalIDs.isEmpty
         desktopState?.isFieldFocused = focused
         onInteractionChange?()
     }
@@ -152,7 +154,10 @@ struct BoardView: View {
                     if !viewModel.proposals.isEmpty {
                         proposalsSection
                     }
-                    if let notice = viewModel.brainDumpNotice {
+                    if !viewModel.cleanupProposals.isEmpty || viewModel.isRunningCleanup {
+                        cleanupSection
+                    }
+                    if let notice = viewModel.brainDumpNotice ?? viewModel.cleanupNotice {
                         Text(notice)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -857,6 +862,149 @@ struct BoardView: View {
         }
     }
 
+    // MARK: - Smart Cleanup 提案（M4）
+
+    /// 清理结果区：重复合并 / 停滞处置 / 项目成组提案卡片，全部需用户确认才落库。
+    private var cleanupSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.purple)
+                Text("智能清理")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.6)
+                Spacer()
+                if viewModel.isRunningCleanup {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 2)
+
+            ForEach(viewModel.cleanupProposals) { proposal in
+                cleanupCard(proposal)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func cleanupCard(_ proposal: CleanupProposal) -> some View {
+        switch proposal.kind {
+        case .duplicate(let pair):
+            duplicateCard(proposal, pair: pair)
+        case .stagnant(let item):
+            stagnantCard(proposal, item: item)
+        case .project(_, let titles):
+            projectCard(proposal, titles: titles)
+        }
+    }
+
+    private func duplicateCard(_ proposal: CleanupProposal, pair: DuplicatePair) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.purple)
+                Text("疑似重复")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if pair.unverified {
+                    Text("未经 AI 确认")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+            }
+            Text(pair.candidate.firstTitle)
+                .font(.callout.weight(.medium))
+            Text(pair.candidate.secondTitle)
+                .font(.callout.weight(.medium))
+            Text(pair.reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button("保留前者") { viewModel.resolveDuplicate(proposal, keepFirst: true) }
+                Button("保留后者") { viewModel.resolveDuplicate(proposal, keepFirst: false) }
+                Spacer()
+                Button("不是重复") { viewModel.dismissCleanup(proposal) }
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func stagnantCard(_ proposal: CleanupProposal, item: StagnantTask) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.taskTitle)
+                .font(.callout.weight(.medium))
+            Text(item.reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button("推进") { viewModel.resolveStagnant(proposal, action: .promote) }
+                if item.kind != .backlogStale {
+                    Button("降级 Backlog") { viewModel.resolveStagnant(proposal, action: .demote) }
+                }
+                Button("删除") { viewModel.resolveStagnant(proposal, action: .delete) }
+                    .foregroundStyle(.red)
+                Spacer()
+                Button("忽略") { viewModel.dismissCleanup(proposal) }
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func projectCard(_ proposal: CleanupProposal, titles: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("这些任务看起来属于同一项目：")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(titles, id: \.self) { title in
+                Text("· \(title)")
+                    .font(.caption)
+            }
+            HStack(spacing: 10) {
+                TextField("项目名", text: projectNameBinding(for: proposal))
+                    .textFieldStyle(.plain)
+                    .font(.callout.weight(.medium))
+                    .focused($cleanupNameFocused)
+                    .onTapGesture { onRequestKeyboard?() }
+                Spacer()
+                Button("建项目") { viewModel.confirmProject(proposal) }
+                Button("忽略") { viewModel.dismissCleanup(proposal) }
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// 项目名就地编辑：写回 viewModel，确认时以最新状态为准
+    private func projectNameBinding(for proposal: CleanupProposal) -> Binding<String> {
+        Binding(
+            get: { proposal.projectName },
+            set: {
+                var updated = proposal
+                updated.projectName = $0
+                viewModel.updateCleanupProposal(updated)
+            }
+        )
+    }
+
     // MARK: - 子任务
 
     /// 父卡下挂的子任务列表 + 行内添加输入框。子任务不参与看板列/Focus，完成只做划线、不消失。
@@ -929,6 +1077,9 @@ struct BoardView: View {
     @ViewBuilder
     private func badges(for task: Task) -> some View {
         let progress = viewModel.subtaskProgress(of: task)
+        if let projectId = task.projectId, let name = viewModel.projectNames[projectId] {
+            badge(name, color: .purple)
+        }
         if progress.total > 0 {
             badge("\(progress.done)/\(progress.total)", color: progress.done == progress.total ? .green : .secondary)
         }

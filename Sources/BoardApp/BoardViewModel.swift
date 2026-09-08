@@ -14,6 +14,8 @@ final class BoardViewModel {
     private(set) var suggestions: [Suggestion] = []
     /// Daily Focus Top N（每日快照：当天复用，跨天或快照任务全部完成/消失时重新生成）
     private(set) var focusItems: [FocusItem] = []
+    /// 项目 id → 项目名（卡片徽标用）
+    private(set) var projectNames: [Int64: String] = [:]
     var errorMessage: String?
 
     /// 本次会话内被「忽略」的建议 id（Suggestion.id = taskId-kind）。
@@ -82,6 +84,10 @@ final class BoardViewModel {
         self.suggestions = RuleEngine
             .suggestions(for: topLevel.map(\.snapshot), now: Date())
             .filter { !dismissedSuggestionIDs.contains($0.id) }
+        // 项目徽标用名查找表（表极小，随任务观察顺手刷新）
+        self.projectNames = ((try? store.projects()) ?? []).reduce(into: [:]) { dict, project in
+            if let id = project.id { dict[id] = project.name }
+        }
         recomputeFocus(topLevel)
     }
 
@@ -296,4 +302,179 @@ final class BoardViewModel {
         guard let data = try? encoder.encode(value) else { return nil }
         return String(data: data, encoding: .utf8)
     }
+
+    // MARK: - Smart Cleanup（M4）
+
+    /// 本次清理的提案列表（重复合并 / 停滞处置 / 项目成组），确认或忽略后移除
+    private(set) var cleanupProposals: [CleanupProposal] = []
+    private(set) var isRunningCleanup = false
+    /// 跑完但什么也没发现时的安静提示
+    var cleanupNotice: String?
+
+    /// 跑一次智能清理：重复检测（AIParser 召回+判定）+ 停滞检测（RuleEngine 纯函数）。
+    /// 产物一律是提案卡片，不做任何静默修改。
+    func runSmartCleanup() {
+        guard !isRunningCleanup else { return }
+        isRunningCleanup = true
+        cleanupNotice = nil
+        // 子任务不参与（随父卡管理）；done 不在清理视野内
+        let snapshots = topLevelTasks.filter { $0.status != .done }.map(\.snapshot)
+        NSLog("BoardApp: smart cleanup start (\(snapshots.count) tasks)")
+        _Concurrency.Task { [weak self] in
+            let pairs = await DuplicateDetector.findDuplicates(tasks: snapshots)
+            guard let self else { return }
+            let stagnant = RuleEngine.stagnantTasks(for: snapshots)
+            var proposals: [CleanupProposal] = pairs.map {
+                CleanupProposal(id: "dup-\($0.id)", kind: .duplicate($0))
+            }
+            proposals += Self.projectProposals(from: pairs, snapshots: snapshots)
+            proposals += stagnant.map {
+                CleanupProposal(id: "stag-\($0.id)", kind: .stagnant($0))
+            }
+            self.cleanupProposals = proposals
+            self.isRunningCleanup = false
+            if proposals.isEmpty {
+                self.cleanupNotice = "看板很干净，没发现重复或停滞任务"
+            }
+            NSLog("BoardApp: smart cleanup done, \(proposals.count) proposals")
+        }
+    }
+
+    /// 编辑项目提案的名字
+    func updateCleanupProposal(_ updated: CleanupProposal) {
+        guard let index = cleanupProposals.firstIndex(where: { $0.id == updated.id }) else { return }
+        cleanupProposals[index] = updated
+    }
+
+    /// 重复提案：保留一方，删除另一方（被删方的 note 合并到保留方），记 dedup correction。
+    func resolveDuplicate(_ proposal: CleanupProposal, keepFirst: Bool) {
+        guard case .duplicate(let pair) = proposal.kind else { return }
+        let keepID = keepFirst ? pair.candidate.firstID : pair.candidate.secondID
+        let dropID = keepFirst ? pair.candidate.secondID : pair.candidate.firstID
+        let persisted = perform("合并任务失败") {
+            if let keep = try store.task(id: keepID), let drop = try store.task(id: dropID),
+               let dropNote = drop.note, !dropNote.isEmpty {
+                let merged = [keep.note, dropNote].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+                if merged != (keep.note ?? "") {
+                    try store.updateTask(id: keepID, note: merged)
+                }
+            }
+            try store.deleteTask(id: dropID)
+            try store.insertCorrection(
+                kind: .dedup,
+                rawInput: "\(pair.candidate.firstTitle) ↔ \(pair.candidate.secondTitle)",
+                aiOutput: pair.reason,
+                finalOutput: keepFirst ? "保留前者" : "保留后者"
+            )
+        }
+        if persisted { dismissCleanup(proposal) }
+    }
+
+    /// 停滞提案操作：推进（→ Todo）/ 降级（→ Backlog）/ 删除。
+    func resolveStagnant(_ proposal: CleanupProposal, action: StagnantAction) {
+        guard case .stagnant(let item) = proposal.kind else { return }
+        let succeeded: Bool = switch action {
+        case .promote:
+            perform("状态更新失败") { try store.setStatus(item.taskId, to: .today) }
+        case .demote:
+            perform("状态更新失败") { try store.setStatus(item.taskId, to: .backlog) }
+        case .delete:
+            perform("删除失败") { try store.deleteTask(id: item.taskId) }
+        }
+        if succeeded { dismissCleanup(proposal) }
+    }
+
+    /// 项目成组提案：建项目并关联全部任务。以最新状态里的名字为准（卡片上可编辑）。
+    func confirmProject(_ proposal: CleanupProposal) {
+        guard let current = cleanupProposals.first(where: { $0.id == proposal.id }),
+              case .project(let taskIDs, _) = current.kind else { return }
+        let name = current.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let persisted = perform("创建项目失败") {
+            let project = try store.createProject(name: name)
+            for taskID in taskIDs {
+                try store.assignTaskToProject(taskId: taskID, projectId: project.id)
+            }
+        }
+        if persisted { dismissCleanup(proposal) }
+    }
+
+    func dismissCleanup(_ proposal: CleanupProposal) {
+        cleanupProposals.removeAll { $0.id == proposal.id }
+    }
+
+    /// 已确认重复对的连通分量（≥3 个任务）→ 项目成组提案，至多 3 个。
+    private static func projectProposals(from pairs: [DuplicatePair], snapshots: [TaskSnapshot]) -> [CleanupProposal] {
+        var parent: [Int64: Int64] = [:]
+        func root(of x: Int64) -> Int64 {
+            var node = x
+            while let next = parent[node], next != node { node = next }
+            return node
+        }
+        func union(_ a: Int64, _ b: Int64) {
+            let (ra, rb) = (root(of: a), root(of: b))
+            if ra != rb { parent[rb] = ra }
+        }
+        for pair in pairs {
+            union(pair.candidate.firstID, pair.candidate.secondID)
+        }
+        var components: [Int64: [Int64]] = [:]
+        for pair in pairs {
+            for id in [pair.candidate.firstID, pair.candidate.secondID] {
+                components[root(of: id), default: []].append(id)
+            }
+        }
+        var seen = Set<Int64>()
+        var result: [CleanupProposal] = []
+        for (_, members) in components where members.count >= 3 {
+            let ids = Array(Set(members)).sorted()
+            guard let first = ids.first, !seen.contains(first) else { continue }
+            seen.formUnion(ids)
+            let titles = ids.compactMap { id in snapshots.first { $0.id == id }?.title }
+            let name = commonPrefix(of: titles)
+            result.append(CleanupProposal(
+                id: "proj-\(ids.map(String.init).joined(separator: "-"))",
+                kind: .project(taskIDs: ids, titles: titles),
+                projectName: name
+            ))
+            if result.count >= 3 { break }
+        }
+        return result
+    }
+
+    /// 项目名建议：标题的最长公共前缀（≥2 字），否则「相关任务」。
+    private static func commonPrefix(of titles: [String]) -> String {
+        guard let first = titles.first, titles.count > 1 else { return "相关任务" }
+        var prefix = first
+        for title in titles.dropFirst() {
+            prefix = String(prefix.prefix(title.count))
+            while !title.hasPrefix(prefix), !prefix.isEmpty {
+                prefix.removeLast()
+            }
+        }
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count >= 2 ? trimmed : "相关任务"
+    }
+}
+
+/// Smart Cleanup 的一条清理提案（重复合并 / 停滞处置 / 项目成组）。
+/// 与 Brain Dump 提案同纪律：AI 产出必须经用户确认才落库。
+struct CleanupProposal: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case duplicate(DuplicatePair)
+        case stagnant(StagnantTask)
+        case project(taskIDs: [Int64], titles: [String])
+    }
+
+    let id: String
+    let kind: Kind
+    /// 项目提案的可编辑名字（仅 .project 用）
+    var projectName: String = ""
+}
+
+/// 停滞提案的处置动作
+enum StagnantAction {
+    case promote  // 拉回 Todo 推进
+    case demote   // 降级 Backlog
+    case delete
 }

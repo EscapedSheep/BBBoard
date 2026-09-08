@@ -7,6 +7,7 @@ import TaskStore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private var viewModel: BoardViewModel?
     private var desktopController: DesktopPanelController?
     private var panelController: PanelController?
     private var hotKeyManager: HotKeyManager?
@@ -34,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let store = Self.makeStore() else { return }
         let viewModel = BoardViewModel(store: store)
+        self.viewModel = viewModel
         // 主形态：常驻桌面的看板
         desktopController = DesktopPanelController(viewModel: viewModel)
         desktopController?.show()
@@ -94,12 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let openItem = NSMenuItem(title: "打开面板 (⌥Space)", action: #selector(togglePanelAction), keyEquivalent: "")
         openItem.target = self
+        let cleanupItem = NSMenuItem(title: "智能清理…", action: #selector(smartCleanupAction), keyEquivalent: "")
+        cleanupItem.target = self
         let quitItem = NSMenuItem(title: "退出", action: #selector(quitAction), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(desktopItem)
         menu.addItem(autoCollapseItem)
         menu.addItem(loginItem)
         menu.addItem(openItem)
+        menu.addItem(cleanupItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
         item.menu = menu
@@ -130,6 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePanelAction() { togglePanel() }
+
+    /// 跑一次智能清理（重复/停滞/成组检测）并打开 Peek 面板展示提案卡片。
+    @objc private func smartCleanupAction() {
+        viewModel?.runSmartCleanup()
+        panelController?.show()
+    }
 
     @objc private func quitAction() { NSApp.terminate(nil) }
 
