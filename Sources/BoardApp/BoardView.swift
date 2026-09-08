@@ -39,6 +39,8 @@ struct BoardView: View {
     @State private var brainDumpOpen = false
     @State private var brainDumpText = ""
     @State private var focusedProposalIDs: Set<UUID> = []
+    /// 悬停延时展开的被截断文本（标题/说明/子任务），见 HoverExpandText
+    @State private var expandedText: ExpandedTextKey?
     @FocusState private var newTaskFieldFocused: Bool
     @FocusState private var editFieldFocused: Bool
     @FocusState private var noteFieldFocused: Bool
@@ -89,13 +91,18 @@ struct BoardView: View {
         }
         // 被编辑的任务可能被删除/改区消失：校验编辑目标仍存在，否则编辑态卡死永不收起
         .onChange(of: viewModel.tasks.map(\.id)) { _, ids in
+            // 输入框在聚焦态被移除时 @FocusState 可能残留 true（非激活面板实测复现，
+            // 表现为 isFieldFocused 卡死、面板永不收起），一律先落回 false
             if let editingTaskID, !ids.contains(editingTaskID) {
+                editFieldFocused = false
                 self.editingTaskID = nil
             }
             if let editingNoteTaskID, !ids.contains(editingNoteTaskID) {
+                noteFieldFocused = false
                 self.editingNoteTaskID = nil
             }
             if let addingSubtaskTo, !ids.contains(addingSubtaskTo) {
+                subtaskFieldFocused = false
                 self.addingSubtaskTo = nil
             }
         }
@@ -116,6 +123,11 @@ struct BoardView: View {
         let focused = newTaskFieldFocused || editFieldFocused || noteFieldFocused || subtaskFieldFocused || brainDumpFieldFocused || !focusedProposalIDs.isEmpty
         desktopState?.isFieldFocused = focused
         onInteractionChange?()
+    }
+
+    /// 卡片内被截断文本（标题/说明/子任务）的悬停展开标识
+    private func expandKey(_ task: Task, _ kind: ExpandedTextKey.Kind) -> ExpandedTextKey {
+        ExpandedTextKey(taskID: task.id ?? 0, kind: kind)
     }
 
     /// 紧凑与展开共用同一视图树：头部始终在场、身份稳定，展开只是在其下方追加内容。
@@ -426,6 +438,8 @@ struct BoardView: View {
                 if brainDumpOpen {
                     onRequestKeyboard?()
                     brainDumpFieldFocused = true
+                } else {
+                    brainDumpFieldFocused = false
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -740,37 +754,56 @@ struct BoardView: View {
                         .onAppear { editFieldFocused = true }
                         .onSubmit {
                             viewModel.rename(task, to: editText)
+                            editFieldFocused = false
                             editingTaskID = nil
                         }
-                        .onExitCommand { editingTaskID = nil }
+                        .onExitCommand {
+                            editFieldFocused = false
+                            editingTaskID = nil
+                        }
                 } else {
                     Text(task.title)
                         .font(.callout.weight(.medium))
-                        .lineLimit(2)
+                        .lineLimit(expandedText == expandKey(task, .title) ? nil : 2)
+                        .modifier(HoverExpandText(key: expandKey(task, .title), expanded: $expandedText))
                         .onTapGesture(count: 2) {
                             // 先激活 + 置 key，再切入编辑态（输入框 onAppear 时聚焦才有效）
                             onRequestKeyboard?()
+                            editFieldFocused = false
                             editText = task.title
                             editingTaskID = task.id
                         }
                 }
 
                 if editingNoteTaskID == task.id {
-                    TextField("说明…", text: $noteText)
+                    TextField("说明…", text: $noteText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(.caption)
+                        .lineLimit(2...5)
                         .focused($noteFieldFocused)
                         .onAppear { noteFieldFocused = true }
                         .onSubmit {
                             viewModel.setNote(task, noteText)
+                            noteFieldFocused = false
                             editingNoteTaskID = nil
                         }
-                        .onExitCommand { editingNoteTaskID = nil }
+                        .onExitCommand {
+                            noteFieldFocused = false
+                            editingNoteTaskID = nil
+                        }
+                        // 失焦即保存（多行模式下回车是换行，不再有 onSubmit 兜底）
+                        .onChange(of: noteFieldFocused) { _, focused in
+                            if !focused, editingNoteTaskID == task.id {
+                                viewModel.setNote(task, noteText)
+                                editingNoteTaskID = nil
+                            }
+                        }
                 } else if let note = task.note, !note.isEmpty {
                     Text(note)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(expandedText == expandKey(task, .note) ? 8 : 2)
+                        .modifier(HoverExpandText(key: expandKey(task, .note), expanded: $expandedText))
                 }
             }
 
@@ -792,19 +825,21 @@ struct BoardView: View {
                 Divider()
                 Button(task.note?.isEmpty == false ? "编辑说明" : "添加说明") {
                     onRequestKeyboard?()
+                    noteFieldFocused = false
                     noteText = task.note ?? ""
                     editingNoteTaskID = task.id
                 }
                 Button("添加子任务") {
                     onRequestKeyboard?()
+                    subtaskFieldFocused = false
                     subtaskText = ""
                     addingSubtaskTo = task.id
                 }
                 Divider()
                 Button("删除", role: .destructive) {
-                    if editingTaskID == task.id { editingTaskID = nil }
-                    if editingNoteTaskID == task.id { editingNoteTaskID = nil }
-                    if addingSubtaskTo == task.id { addingSubtaskTo = nil }
+                    if editingTaskID == task.id { editFieldFocused = false; editingTaskID = nil }
+                    if editingNoteTaskID == task.id { noteFieldFocused = false; editingNoteTaskID = nil }
+                    if addingSubtaskTo == task.id { subtaskFieldFocused = false; addingSubtaskTo = nil }
                     viewModel.delete(task)
                 }
             } label: {
@@ -841,9 +876,13 @@ struct BoardView: View {
                         .onAppear { subtaskFieldFocused = true }
                         .onSubmit {
                             viewModel.addSubtask(to: task, title: subtaskText)
+                            subtaskFieldFocused = false
                             addingSubtaskTo = nil
                         }
-                        .onExitCommand { addingSubtaskTo = nil }
+                        .onExitCommand {
+                            subtaskFieldFocused = false
+                            addingSubtaskTo = nil
+                        }
                 }
             }
             .padding(.leading, 26)
@@ -867,7 +906,8 @@ struct BoardView: View {
                 .font(.caption)
                 .foregroundStyle(subtask.status == .done ? .tertiary : .secondary)
                 .strikethrough(subtask.status == .done)
-                .lineLimit(1)
+                .lineLimit(expandedText == expandKey(subtask, .subtask) ? 6 : 1)
+                .modifier(HoverExpandText(key: expandKey(subtask, .subtask), expanded: $expandedText))
 
             Spacer(minLength: 2)
 
@@ -1110,5 +1150,45 @@ private struct ProposalCardView: View {
             return
         }
         proposal.status = Self.statusCycle[(index + 1) % Self.statusCycle.count]
+    }
+}
+
+// MARK: - 截断文本的悬停展开
+
+/// 标识卡片里一段可被截断的文本：任务 id + 种类
+private struct ExpandedTextKey: Equatable {
+    enum Kind { case title, note, subtask }
+    let taskID: Int64
+    let kind: Kind
+}
+
+/// 悬停 0.5s 后把被截断的文本原地展开（解除 lineLimit），移开恢复。
+/// 桌面挂板/Peek 都是 nonactivating panel：悬停时 App 不激活，系统 tooltip（.help）不显示，
+/// 故用原地展开替代。未截断的文本展开后无视觉变化，等于天然只作用于"真的被截断"的文本。
+private struct HoverExpandText: ViewModifier {
+    let key: ExpandedTextKey
+    @Binding var expanded: ExpandedTextKey?
+    @State private var pending: DispatchWorkItem?
+
+    private static let delay: TimeInterval = 0.5
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                pending?.cancel()
+                pending = nil
+                if hovering {
+                    let work = DispatchWorkItem { expanded = key }
+                    pending = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.delay, execute: work)
+                } else if expanded == key {
+                    expanded = nil
+                }
+            }
+            .onDisappear {
+                pending?.cancel()
+                pending = nil
+                if expanded == key { expanded = nil }
+            }
     }
 }

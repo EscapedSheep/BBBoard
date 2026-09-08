@@ -173,6 +173,10 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
             self, selector: #selector(appWillTerminate),
             name: NSApplication.willTerminateNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(panelDidResignKey),
+            name: NSWindow.didResignKeyNotification, object: panel
+        )
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -357,6 +361,15 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
 
     @objc private func menuDidEndTracking(_ notification: Notification) {
         menuTrackingCount = max(0, menuTrackingCount - 1)
+        evaluateCollapseAfterSuppressionChange()
+    }
+
+    /// 面板失去 key = 文本输入必然结束。@FocusState 在"输入框于聚焦态被移除"时可能残留 true
+    /// （实测复现：isFieldFocused 卡死 → 面板永不收起），这里兜底落地。
+    @objc private func panelDidResignKey(_ notification: Notification) {
+        guard state.isFieldFocused else { return }
+        dbg("resignKey: clear stuck isFieldFocused")
+        state.isFieldFocused = false
         evaluateCollapseAfterSuppressionChange()
     }
 
