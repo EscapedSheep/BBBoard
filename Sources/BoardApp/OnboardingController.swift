@@ -31,9 +31,13 @@ final class OnboardingController {
         }
         let hosting = NSHostingController(rootView: view)
         panel.contentViewController = hosting
-        // 同 SettingsController：macOS 26 下 hosting view 初始 frame 为 0×0，必须补齐
-        hosting.view.frame = NSRect(origin: .zero, size: NSSize(width: 380, height: 300))
+        // 同 SettingsController：macOS 26 下 hosting view 初始 frame 为 0×0 必须补齐；
+        // 尺寸取内容实测大小，写死高度会在文案变长时裁掉内容
+        let fitting = hosting.sizeThatFits(in: NSSize(width: 380, height: 2000))
+        let contentSize = NSSize(width: 380, height: max(fitting.height, 120))
+        hosting.view.frame = NSRect(origin: .zero, size: contentSize)
         hosting.view.autoresizingMask = [.width, .height]
+        panel.setContentSize(contentSize)
 
         panel.center()
         NSApp.activate()

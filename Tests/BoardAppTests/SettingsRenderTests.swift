@@ -18,8 +18,12 @@ final class SettingsRenderTests: XCTestCase {
             defer: false
         )
         window.contentViewController = hosting
-        hosting.view.frame = NSRect(origin: .zero, size: NSSize(width: 340, height: 280))
+        // 与控制器同款写法：frame 取内容实测大小（写死高度会裁掉控件）
+        let fitting = hosting.sizeThatFits(in: NSSize(width: 340, height: 2000))
+        let contentSize = NSSize(width: 340, height: max(fitting.height, 120))
+        hosting.view.frame = NSRect(origin: .zero, size: contentSize)
         hosting.view.autoresizingMask = [.width, .height]
+        window.setContentSize(contentSize)
         window.orderBack(nil)
         window.layoutIfNeeded()
         hosting.view.layoutSubtreeIfNeeded()
@@ -27,7 +31,9 @@ final class SettingsRenderTests: XCTestCase {
 
         let bounds = hosting.view.bounds
         XCTAssertEqual(bounds.width, 340)
-        XCTAssertEqual(bounds.height, 280)
+        XCTAssertEqual(bounds.height, contentSize.height)
+        // 5 个 Stepper + Toggle 的 grouped Form 实测高度应在合理区间（写死 280 会裁掉内容）
+        XCTAssertGreaterThan(fitting.height, 280, "内容实测高度异常偏小，fitting size 不可信")
 
         guard let rep = hosting.view.bitmapImageRepForCachingDisplay(in: bounds) else {
             return XCTFail("无法创建位图")

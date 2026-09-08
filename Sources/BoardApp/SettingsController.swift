@@ -31,9 +31,13 @@ final class SettingsController: NSObject {
         let hosting = NSHostingController(rootView: settingsView)
         panel.contentViewController = hosting
         // macOS 26：经 contentViewController 安装的 NSHostingView 初始 frame 是 0×0，
-        // 不补 frame 窗口就是一片空白（实测复现）；autoresizingMask 跟随后续尺寸变化
-        hosting.view.frame = NSRect(origin: .zero, size: NSSize(width: 340, height: 280))
+        // 不补 frame 窗口就是一片空白（实测复现）。尺寸取 SwiftUI 内容的实测大小，
+        // 写死高度会在内容变高时裁掉控件；autoresizingMask 跟随后续尺寸变化。
+        let fitting = hosting.sizeThatFits(in: NSSize(width: 340, height: 2000))
+        let contentSize = NSSize(width: 340, height: max(fitting.height, 120))
+        hosting.view.frame = NSRect(origin: .zero, size: contentSize)
         hosting.view.autoresizingMask = [.width, .height]
+        panel.setContentSize(contentSize)
 
         NotificationCenter.default.addObserver(
             self,
