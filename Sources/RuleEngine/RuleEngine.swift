@@ -72,6 +72,18 @@ public struct Suggestion: Sendable, Equatable, Identifiable {
     }
 }
 
+extension Suggestion.Kind {
+    /// 建议列表的排序优先级（越小越靠前）
+    var sortOrder: Int {
+        switch self {
+        case .overdue: 0
+        case .dueApproaching: 1
+        case .waitingTooLong: 2
+        case .doingTooLong: 3
+        }
+    }
+}
+
 /// 规则阈值，全部以自然日计。
 public struct RuleThresholds: Sendable, Equatable {
     /// 距截止多少天内视为「临近」
@@ -109,11 +121,8 @@ public enum RuleEngine {
                 result.append(suggestion)
             }
         }
-        let priority: [Suggestion.Kind: Int] = [
-            .overdue: 0, .dueApproaching: 1, .waitingTooLong: 2, .doingTooLong: 3
-        ]
         return result.sorted {
-            (priority[$0.kind]!, $0.taskId) < (priority[$1.kind]!, $1.taskId)
+            ($0.kind.sortOrder, $0.taskId) < ($1.kind.sortOrder, $1.taskId)
         }
     }
 
