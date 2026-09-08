@@ -228,33 +228,11 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
         handlePointerTransition(inside: inside, source: source)
     }
 
-    // MARK: - 临时诊断（拖拽回落问题排查，定位后移除）
-
-    private func dbg(_ message: String) {
-        let line = String(format: "%.3f %@\n", Date().timeIntervalSince1970, message)
-        let url = URL(fileURLWithPath: "/tmp/bbboard-debug.log")
-        if let handle = try? FileHandle(forWritingTo: url) {
-            // 上限保护：超过 512KB 截断重来（诊断日志，丢历史可接受）
-            if handle.seekToEndOfFile() > 512 * 1024 {
-                try? handle.close()
-                try? "".write(to: url, atomically: false, encoding: .utf8)
-            }
-            if let handle = try? FileHandle(forWritingTo: url) {
-                handle.seekToEndOfFile()
-                handle.write(Data(line.utf8))
-                try? handle.close()
-            }
-        } else {
-            try? line.write(to: url, atomically: false, encoding: .utf8)
-        }
-    }
-
     private func handlePointerTransition(inside: Bool, source: String) {
         // 两个通道（trackingArea / 全局监听）去重：状态未翻转的事件直接丢弃
         guard inside != pointerInside else { return }
         pointerInside = inside
         NSLog("BoardApp[desktop]: pointer \(inside ? "entered" : "exited") via \(source)")
-        dbg("pointer \(inside ? "enter" : "exit") via \(source) frame=\(panel.frame) anchor=\(anchorTopLeft)")
         inside ? hoverEntered() : hoverExited()
     }
 
@@ -272,7 +250,6 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
 
     private func setExpanded(_ expanded: Bool) {
         guard state.isExpanded != expanded else { return }
-        dbg("setExpanded(\(expanded)) frame=\(panel.frame) anchor=\(anchorTopLeft)")
         withAnimation(.easeInOut(duration: 0.15)) {
             state.isExpanded = expanded
         }
@@ -296,17 +273,7 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
     }
 
     private func collapseNow() {
-        guard !collapseSuppressed else {
-            let keyDesc: String
-            if let key = NSApp.keyWindow {
-                keyDesc = key === panel ? "panel" : "other(\(type(of: key)))"
-            } else {
-                keyDesc = "nil"
-            }
-            dbg("collapseNow suppressed: dragging=\(isDragging) editing=\(state.isEditing) focused=\(state.isFieldFocused) menuTracking=\(menuTrackingCount) key=\(keyDesc)")
-            return
-        }
-        dbg("collapseNow -> collapse")
+        guard !collapseSuppressed else { return }
         setExpanded(false)
     }
 
@@ -368,7 +335,7 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
     /// （实测复现：isFieldFocused 卡死 → 面板永不收起），这里兜底落地。
     @objc private func panelDidResignKey(_ notification: Notification) {
         guard state.isFieldFocused else { return }
-        dbg("resignKey: clear stuck isFieldFocused")
+        NSLog("BoardApp[desktop]: resignKey, clear stuck isFieldFocused")
         state.isFieldFocused = false
         evaluateCollapseAfterSuppressionChange()
     }
@@ -384,7 +351,6 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
         isDragging = true
         cancelScheduledCollapse()
         dragGeneration += 1
-        dbg("dragBegin frame=\(panel.frame) anchor=\(anchorTopLeft)")
         // 取消仍在进行中的窗口动画（如 hover 展开的 0.16s frame 动画），
         // 避免它在拖拽期间把窗口拉回动画开始时的旧锚点目标。
         NSAnimationContext.beginGrouping()
@@ -410,7 +376,6 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
     /// 移动本身是系统路径（WindowServer 异步拖拽）完成的，这里只做落定。
     private func nativeDragEnd() {
         guard isDragging else { return }
-        dbg("dragEnd frame=\(panel.frame)")
         let clamped = Self.clampedToVisibleFrame(panel.frame)
         if clamped != panel.frame {
             NSAnimationContext.beginGrouping()
@@ -421,7 +386,6 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
         anchorTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         Self.saveAnchor(anchorTopLeft)
         NSLog("BoardApp[desktop]: drag settled, anchor=\(self.anchorTopLeft)")
-        dbg("dragEnd settled anchor=\(anchorTopLeft) frame=\(panel.frame)")
         isDragging = false
         // 拖拽期间被跳过的尺寸变化（见 resize 的 isDragging 守卫）在此按落定锚点补齐
         resize(toIdealHeight: lastIdealHeight)
@@ -485,10 +449,7 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
     /// 尺寸变化延后到 nativeDragEnd 落定后统一套用。
     private func resize(toIdealHeight height: CGFloat) {
         lastIdealHeight = height
-        if isDragging {
-            dbg("resize skipped (dragging) h=\(height)")
-            return
-        }
+        if isDragging { return }
         let frame = Self.frame(height: height, anchor: anchorTopLeft, expanded: state.isExpanded)
         let changed = abs(frame.height - panel.frame.height) > 0.5
             || abs(frame.width - panel.frame.width) > 0.5
@@ -496,7 +457,6 @@ final class DesktopPanelController: NSObject, @unchecked Sendable {
         guard changed else { return }
         // 宽度变化经钳制可能左移：以实际 frame 更新锚点，避免收起/展开来回跳
         anchorTopLeft = NSPoint(x: frame.minX, y: frame.maxY)
-        dbg("resize h=\(height) expanded=\(state.isExpanded) -> frame=\(frame) from=\(panel.frame)")
         guard didInitialLayout else {
             panel.setFrame(frame, display: false)
             didInitialLayout = true
