@@ -314,7 +314,7 @@ final class BoardViewModel {
     // MARK: - Smart Cleanup（M4）
 
     /// 本次清理的提案列表（重复合并 / 停滞处置 / 项目成组），确认或忽略后移除
-    private(set) var cleanupProposals: [CleanupProposal] = []
+    var cleanupProposals: [CleanupProposal] = []
     private(set) var isRunningCleanup = false
     /// 跑完但什么也没发现时的安静提示
     var cleanupNotice: String?
@@ -412,7 +412,8 @@ final class BoardViewModel {
     }
 
     /// 已确认重复对的连通分量（≥3 个任务）→ 项目成组提案，至多 3 个。
-    private static func projectProposals(from pairs: [DuplicatePair], snapshots: [TaskSnapshot]) -> [CleanupProposal] {
+    /// internal（非 private）供单测直接验证并查集聚类逻辑。
+    static func projectProposals(from pairs: [DuplicatePair], snapshots: [TaskSnapshot]) -> [CleanupProposal] {
         var parent: [Int64: Int64] = [:]
         func root(of x: Int64) -> Int64 {
             var node = x
@@ -451,7 +452,8 @@ final class BoardViewModel {
     }
 
     /// 项目名建议：标题的最长公共前缀（≥2 字），否则「相关任务」。
-    private static func commonPrefix(of titles: [String]) -> String {
+    /// internal（非 private）供单测直接验证。
+    static func commonPrefix(of titles: [String]) -> String {
         guard let first = titles.first, titles.count > 1 else { return "相关任务" }
         var prefix = first
         for title in titles.dropFirst() {
