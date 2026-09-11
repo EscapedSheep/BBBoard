@@ -99,7 +99,7 @@ final class BoardViewModel {
     /// 上次生成/复用快照的日期（startOfDay）；面板重新展示时比对，跨天则重算
     private var focusDay: Date?
 
-    /// 幂等规则（计划 §M3）：当天快照存在且引用任务未全部完成 → 直接复用；
+    /// 幂等规则（计划 §M3）：当天快照存在且引用任务未全部完成 → 直接复用（剔除已完成/已消失的任务）；
     /// 跨天 / 快照任务全部完成或消失 → 重新生成并覆盖快照。
     private func recomputeFocus(_ tasks: [Task]) {
         let today = Calendar.current.startOfDay(for: Date())
@@ -111,7 +111,7 @@ final class BoardViewModel {
             }
             if !snapshot.isEmpty, !allResolved {
                 focusItems = snapshot.compactMap { row in
-                    guard let task = tasks.first(where: { $0.id == row.taskId }) else { return nil }
+                    guard let task = tasks.first(where: { $0.id == row.taskId }), task.status != .done else { return nil }
                     return FocusItem(taskId: row.taskId, taskTitle: task.title, reason: row.reason, score: 0, rank: row.rank)
                 }
                 focusDay = today
@@ -142,12 +142,6 @@ final class BoardViewModel {
     /// 设置（阈值/Focus 条数）变化后重算派生数据（建议 + Focus）。
     func recomputeDerived() {
         apply(tasks: tasks)
-    }
-
-    /// 点击 FOCUS 行：标记为进行中（最小可用交互）。
-    func activateFocus(_ item: FocusItem) {
-        guard let task = tasks.first(where: { $0.id == item.taskId }) else { return }
-        setStatus(task, to: .doing)
     }
 
     // MARK: - 操作
@@ -190,6 +184,18 @@ final class BoardViewModel {
     func setStatus(_ task: Task, to status: TaskStatus) {
         guard let id = task.id else { return }
         perform("状态更新失败") { try store.setStatus(id, to: status) }
+    }
+
+    /// 设置/清除截止时间（nil = 清除）。
+    func setDueDate(_ task: Task, to dueDate: Date?) {
+        guard let id = task.id else { return }
+        perform("更新截止时间失败") {
+            if let dueDate {
+                try store.updateTask(id: id, dueDate: dueDate)
+            } else {
+                try store.updateTask(id: id, clearDueDate: true)
+            }
+        }
     }
 
     func toggleDone(_ task: Task) {

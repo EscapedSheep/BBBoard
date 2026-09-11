@@ -29,9 +29,13 @@ struct BoardView: View {
     @State private var editText = ""
     @State private var editingNoteTaskID: Int64?
     @State private var noteText = ""
+    /// 行内截止日期编辑中的任务（⋯ 菜单「选择日期…」触发）
+    @State private var editingDueTaskID: Int64?
     @State private var addingSubtaskTo: Int64?
     @State private var subtaskText = ""
     @State private var hoveredTaskID: Int64?
+    /// Finder 式选中：单击选中卡片（高亮），再单击已选中的卡片进入重命名编辑
+    @State private var selectedTaskID: Int64?
     @State private var chromeHeight: CGFloat = 0
     @State private var sectionsHeight: CGFloat = 0
     @State private var dropTargetSection: TaskStatus?
@@ -88,10 +92,8 @@ struct BoardView: View {
             reportIdealHeight()
             if !compact { viewModel.refreshFocusIfDayChanged() }
         }
-        .onChange(of: editingTaskID != nil) { _, editing in
-            desktopState?.isEditing = editing
-            onInteractionChange?()
-        }
+        .onChange(of: editingTaskID != nil) { _, _ in syncEditingState() }
+        .onChange(of: editingDueTaskID != nil) { _, _ in syncEditingState() }
         // 被编辑的任务可能被删除/改区消失：校验编辑目标仍存在，否则编辑态卡死永不收起
         .onChange(of: viewModel.tasks.map(\.id)) { _, ids in
             // 输入框在聚焦态被移除时 @FocusState 可能残留 true（非激活面板实测复现，
@@ -108,6 +110,12 @@ struct BoardView: View {
                 subtaskFieldFocused = false
                 self.addingSubtaskTo = nil
             }
+            if let editingDueTaskID, !ids.contains(editingDueTaskID) {
+                self.editingDueTaskID = nil
+            }
+            if let selectedTaskID, !ids.contains(selectedTaskID) {
+                self.selectedTaskID = nil
+            }
         }
         .onChange(of: newTaskFieldFocused) { _, _ in syncFieldFocus() }
         .onChange(of: editFieldFocused) { _, _ in syncFieldFocus() }
@@ -120,6 +128,12 @@ struct BoardView: View {
             focusedProposalIDs.formIntersection(ids)
             syncFieldFocus()
         }
+    }
+
+    /// 重命名/截止日期编辑中都抑制面板收起（desktop 模式）。
+    private func syncEditingState() {
+        desktopState?.isEditing = editingTaskID != nil || editingDueTaskID != nil
+        onInteractionChange?()
     }
 
     /// 任一文本输入框（新建/重命名/说明/子任务/brain dump/提案卡片）聚焦都算"输入中"，抑制面板收起。
@@ -208,6 +222,30 @@ struct BoardView: View {
 
     private func accent(for status: TaskStatus) -> Color { statusAccent(status) }
 
+    /// 状态字形 + 天数环（任务卡与 FOCUS 行共用同一视觉语言）。
+    @ViewBuilder
+    private func statusGlyphWithRing(_ task: Task, ringSize: CGFloat = 22, glyphSize: CGFloat = 12) -> some View {
+        ZStack {
+            if let ring = timeRing(for: task) {
+                Circle()
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1.5)
+                // 上一圈浅色整圈留底（年龄环多圈制的"资历层"）
+                if let underlay = ring.underlay {
+                    Circle()
+                        .stroke(underlay.opacity(0.35), lineWidth: 1.5)
+                }
+                Circle()
+                    .trim(from: 0, to: ring.progress)
+                    .stroke(ring.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            Image(systemName: glyph(for: task.status))
+                .font(.system(size: glyphSize))
+                .foregroundStyle(accent(for: task.status))
+        }
+        .frame(width: ringSize, height: ringSize)
+    }
+
     // MARK: - Header
 
     private var header: some View {
@@ -239,9 +277,7 @@ struct BoardView: View {
 
     // MARK: - Daily Focus
 
-    @State private var hoveredFocusID: Int64?
-
-    /// FOCUS 区：Top 3 + 主因标签。点击行 = 标记为进行中（最小交互）。
+    /// FOCUS 区：Top 3 + 主因标签。纯展示（点击挪 DOING 容易误触；改状态用拖拽或菜单）。
     private var focusSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 5) {
@@ -258,46 +294,36 @@ struct BoardView: View {
             .padding(.bottom, 2)
 
             ForEach(viewModel.focusItems) { item in
-                Button { viewModel.activateFocus(item) } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: glyph(for: liveStatus(of: item)))
+                HStack(spacing: 8) {
+                    // 与任务卡同款"字形 + 天数环"；任务已消失则回退纯字形
+                    if let task = viewModel.tasks.first(where: { $0.id == item.taskId }) {
+                        statusGlyphWithRing(task, ringSize: 20, glyphSize: 11)
+                    } else {
+                        Image(systemName: glyph(for: .today))
                             .font(.system(size: 13))
-                            .foregroundStyle(accent(for: liveStatus(of: item)))
+                            .foregroundStyle(accent(for: .today))
                             .frame(width: 16, height: 16)
-                        Text(item.taskTitle)
-                            .font(.callout.weight(.medium))
-                            .lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text(item.reason)
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red.opacity(0.10))
-                            .foregroundStyle(.red)
-                            .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        hoveredFocusID == item.taskId ? Color.primary.opacity(0.06) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Text(item.taskTitle)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(item.reason)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.10))
+                        .foregroundStyle(.red)
+                        .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
-                .help("点击标记为进行中")
-                .onHover { hoveredFocusID = $0 ? item.taskId : nil }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             }
         }
         .padding(10)
         .background(Color.red.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
-    }
-
-    /// 快照之后任务可能已变化：展示实时状态字形，找不到回退 today。
-    private func liveStatus(of item: FocusItem) -> TaskStatus {
-        viewModel.tasks.first(where: { $0.id == item.taskId })?.status ?? .today
     }
 
     // MARK: - 建议区
@@ -600,6 +626,8 @@ struct BoardView: View {
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .contentShape(Rectangle())
+        // 点空白处取消选中（Finder 式）
+        .onTapGesture { selectedTaskID = nil }
         .dropDestination(for: String.self) { items, _ in
             handleDrop(items, to: status)
         } isTargeted: { targeted in
@@ -739,25 +767,65 @@ struct BoardView: View {
     private func taskRowContent(_ task: Task) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             mainRow(task)
+            if editingDueTaskID == task.id {
+                // 行内截止日期编辑（⋯ 菜单「选择日期…」触发）
+                HStack(spacing: 8) {
+                    Image(systemName: "calendar")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    DatePicker("", selection: dueBinding(for: task), displayedComponents: .date)
+                        .labelsHidden()
+                        .controlSize(.small)
+                    if task.dueDate != nil {
+                        Button("清除") {
+                            viewModel.setDueDate(task, to: nil)
+                            editingDueTaskID = nil
+                        }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                    }
+                    Button("完成") { editingDueTaskID = nil }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                    Spacer()
+                }
+                .padding(.leading, 30)
+                .padding(.top, 2)
+            }
             subtaskArea(task)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(
-            hoveredTaskID == task.id ? Color.primary.opacity(0.06) : Color.clear,
+            selectedTaskID == task.id ? Color.accentColor.opacity(0.12)
+                : hoveredTaskID == task.id ? Color.primary.opacity(0.06) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { hoveredTaskID = $0 ? task.id : nil }
     }
 
+    /// 进入标题编辑（先激活 + 置 key，输入框 onAppear 时聚焦才有效）。
+    private func startEditing(_ task: Task) {
+        onRequestKeyboard?()
+        editFieldFocused = false
+        editText = task.title
+        editingTaskID = task.id
+    }
+
+    /// 行内日期选择器的绑定：未设过截止的卡默认从今天起选。
+    private func dueBinding(for task: Task) -> Binding<Date> {
+        Binding(
+            get: { task.dueDate ?? Date() },
+            set: { viewModel.setDueDate(task, to: $0) }
+        )
+    }
+
     private func mainRow(_ task: Task) -> some View {
         HStack(spacing: 8) {
-            // 纯状态指示，不可点击（点击完成太容易误触；完成用拖拽到 DONE 或右键菜单）
-            Image(systemName: glyph(for: task.status))
-                .font(.system(size: 15))
-                .foregroundStyle(accent(for: task.status))
-                .frame(width: 18, height: 18)
+            // 状态字形不可点击（点击完成太容易误触）；外圈细环 = 天数进度（见 timeRing）
+            statusGlyphWithRing(task)
 
             VStack(alignment: .leading, spacing: 2) {
                 if editingTaskID == task.id {
@@ -780,13 +848,6 @@ struct BoardView: View {
                         .font(.callout.weight(.medium))
                         .lineLimit(expandedText == expandKey(task, .title) ? nil : 2)
                         .modifier(HoverExpandText(key: expandKey(task, .title), expanded: $expandedText))
-                        .onTapGesture(count: 2) {
-                            // 先激活 + 置 key，再切入编辑态（输入框 onAppear 时聚焦才有效）
-                            onRequestKeyboard?()
-                            editFieldFocused = false
-                            editText = task.title
-                            editingTaskID = task.id
-                        }
                 }
 
                 if editingNoteTaskID == task.id {
@@ -837,6 +898,16 @@ struct BoardView: View {
                     }
                 }
                 Divider()
+                Menu("截止时间…") {
+                    Button("今天") { viewModel.setDueDate(task, to: Date()) }
+                    Button("明天") { viewModel.setDueDate(task, to: Date().addingTimeInterval(86400)) }
+                    Button("一周后") { viewModel.setDueDate(task, to: Date().addingTimeInterval(7 * 86400)) }
+                    Divider()
+                    Button("选择日期…") { editingDueTaskID = task.id }
+                    if task.dueDate != nil {
+                        Button("清除截止时间") { viewModel.setDueDate(task, to: nil) }
+                    }
+                }
                 Button(task.note?.isEmpty == false ? "编辑说明" : "添加说明") {
                     onRequestKeyboard?()
                     noteFieldFocused = false
@@ -854,6 +925,7 @@ struct BoardView: View {
                     if editingTaskID == task.id { editFieldFocused = false; editingTaskID = nil }
                     if editingNoteTaskID == task.id { noteFieldFocused = false; editingNoteTaskID = nil }
                     if addingSubtaskTo == task.id { subtaskFieldFocused = false; addingSubtaskTo = nil }
+                    if editingDueTaskID == task.id { editingDueTaskID = nil }
                     viewModel.delete(task)
                 }
             } label: {
@@ -868,6 +940,16 @@ struct BoardView: View {
             .fixedSize()
             .opacity(hoveredTaskID == task.id ? 1 : 0)
             .allowsHitTesting(hoveredTaskID == task.id)
+        }
+        .contentShape(Rectangle())
+        // Finder 式重命名：单击选中卡片，再单击已选中的卡片进入编辑（快速双击同样生效）
+        .onTapGesture {
+            guard editingTaskID != task.id else { return }
+            if selectedTaskID == task.id {
+                startEditing(task)
+            } else {
+                selectedTaskID = task.id
+            }
         }
     }
 
@@ -1092,21 +1174,43 @@ struct BoardView: View {
         if progress.total > 0 {
             badge("\(progress.done)/\(progress.total)", color: progress.done == progress.total ? .green : .secondary)
         }
-        if let waitingSince = task.waitingSince {
-            let days = dayDiff(from: waitingSince, to: Date())
-            let text = task.waitingOn.map { "等 \($0) · \(days)天" } ?? "等待 \(days)天"
-            badge(text, color: .orange)
+        // 天数不写文字，由状态字形外的圆弧表达（见 timeRing）；这里只保留"等谁"
+        if task.status == .waiting, let waitingOn = task.waitingOn, !waitingOn.isEmpty {
+            badge("等 \(waitingOn)", color: .orange)
         }
+    }
+
+    /// 卡片的"天数环"：环绕状态字形的细圆弧，弧长随时间**增长**。
+    /// 有截止日期的卡按 创建→截止 跨度倒计时（灰 = 从容，橙 = 进入临近窗口，红满环 = 已逾期）；
+    /// 等待中的卡按"等待超时"设置计时（橙色弧）；没设时间的卡走"年龄环"：每 7 天一圈，
+    /// 长满换色继续画（灰 → 蓝 → 橙 → 红），上一圈以浅色留底，28 天后红满环封顶。
+    /// underlay = 上一圈的颜色（以浅色整圈留底），无则 nil。
+    private func timeRing(for task: Task) -> (progress: Double, color: Color, underlay: Color?)? {
+        guard task.status != .done else { return nil }
+        let now = Date()
         if let due = task.dueDate {
-            let days = dayDiff(from: Date(), to: due)
-            let text: String = switch days {
-            case ..<0: "逾期\(-days)天"
-            case 0: "今天截止"
-            case 1: "明天截止"
-            default: "\(days)天后"
-            }
-            badge(text, color: days < 0 ? .red : days <= 1 ? .orange : .secondary)
+            let days = dayDiff(from: now, to: due)
+            if days < 0 { return (1, .red, nil) }
+            // 倒计时进度 = 已消耗的时间占这张卡 创建→截止 总跨度的比例（防除零至少 1 小时）
+            let total = max(due.timeIntervalSince(task.createdAt), 3600)
+            let elapsed = now.timeIntervalSince(task.createdAt)
+            let nearDue = days <= viewModel.settings.dueApproachingDays
+            // 满环留给"已逾期"：未到截止最多 95%；临近的卡给个弧长下限保证可读
+            let progress = nearDue ? min(0.95, max(0.3, elapsed / total)) : min(0.95, max(0.04, elapsed / total))
+            return (progress, nearDue ? .orange : .secondary, nil)
         }
+        if task.status == .waiting, let since = task.waitingSince {
+            let days = dayDiff(from: since, to: now)
+            if days > 0 { return (min(1, Double(days) / Double(viewModel.settings.waitingTooLongDays)), .orange, nil) }
+        }
+        // 年龄环：每 7 天一圈，长满一圈换色在原圈上继续画；上一圈浅色留底
+        let age = now.timeIntervalSince(task.createdAt)
+        let lapLength = 7 * 86400.0
+        let lap = Int(age / lapLength)
+        let lapColors: [Color] = [.secondary, .blue, .orange, .red]
+        let lapIndex = min(lap, lapColors.count - 1)
+        let progress = lap >= lapColors.count ? 1 : max(0.04, age.truncatingRemainder(dividingBy: lapLength) / lapLength)
+        return (progress, lapColors[lapIndex], lapIndex > 0 ? lapColors[lapIndex - 1] : nil)
     }
 
     private func badge(_ text: String, color: Color) -> some View {
@@ -1157,7 +1261,8 @@ private struct HeaderHeightKey: PreferenceKey {
 
 private func statusGlyph(_ status: TaskStatus) -> String {
     switch status {
-    case .backlog, .today: "square"
+    // 虚线圆 = 未开始：避免方框带来的"可点 checkbox"错觉（实际不可点击）
+    case .backlog, .today: "circle.dashed"
     case .doing: "circle.fill"
     case .waiting: "pause.circle"
     case .done: "checkmark.circle.fill"
