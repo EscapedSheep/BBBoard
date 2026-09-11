@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let onboardingController = OnboardingController()
     private weak var desktopMenuItem: NSMenuItem?
     private weak var autoCollapseMenuItem: NSMenuItem?
+    private weak var focusPinMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 无 Dock 图标、无菜单栏菜单的 accessory 形态（开发期免 Info.plist）。
@@ -106,6 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoCollapseItem.state = (desktopController?.autoCollapse ?? true) ? .on : .off
         autoCollapseMenuItem = autoCollapseItem
 
+        let focusPinItem = NSMenuItem(title: "收起时显示 Focus", action: #selector(toggleFocusPinAction), keyEquivalent: "")
+        focusPinItem.target = self
+        focusPinItem.state = AppSettings.shared.focusPinnedInCompact ? .on : .off
+        focusPinMenuItem = focusPinItem
+
         let loginItem = NSMenuItem(title: "开机自启", action: #selector(toggleLaunchAtLoginAction(_:)), keyEquivalent: "")
         loginItem.target = self
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -120,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(desktopItem)
         menu.addItem(autoCollapseItem)
+        menu.addItem(focusPinItem)
         menu.addItem(loginItem)
         menu.addItem(openItem)
         menu.addItem(cleanupItem)
@@ -146,6 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleAutoCollapseAction() {
         desktopController?.toggleAutoCollapse()
         autoCollapseMenuItem?.state = (desktopController?.autoCollapse ?? true) ? .on : .off
+    }
+
+    @objc private func toggleFocusPinAction() {
+        AppSettings.shared.focusPinnedInCompact.toggle()
+        focusPinMenuItem?.state = AppSettings.shared.focusPinnedInCompact ? .on : .off
     }
 
     @objc private func toggleDesktopAction() {

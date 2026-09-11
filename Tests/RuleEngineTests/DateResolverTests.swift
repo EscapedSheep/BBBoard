@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import AIParser
+@testable import RuleEngine
 
 final class DateResolverTests: XCTestCase {
     /// 固定参考时间：2026-09-02（周三）12:00，Asia/Shanghai，周一为一周起点。

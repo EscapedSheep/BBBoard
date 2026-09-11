@@ -1,4 +1,3 @@
-import AIParser
 import Foundation
 import Observation
 import RuleEngine
@@ -25,12 +24,11 @@ final class BoardViewModel {
 
     // Brain Dump 确认流状态
     var proposals: [TaskProposal] = []
-    var isParsingBrainDump = false
     /// 解析无结果时的安静提示
     var brainDumpNotice: String?
     /// 解析所用的原始输入与原始产出（corrections 记录用）
     private var lastBrainDumpRaw = ""
-    private var lastAIOutputJSON = "[]"
+    private var lastParsedJSON = "[]"
 
     init(store: TaskStore, settings: AppSettings = .shared) {
         self.store = store
@@ -120,7 +118,6 @@ final class BoardViewModel {
 
             let counts = try store.recentActivityCounts(days: FocusConfig.default.activityWindowDays)
             let items = RuleEngine.focus(tasks: tasks.map(\.snapshot), activityCounts: counts, now: Date(), config: settings.focusConfig)
-            // M3 可选 LLM 重排挂点：此处可对 items 应用 FocusReranker（当前未启用）
             try store.saveFocusSnapshot(
                 day: today,
                 items: items.map { FocusItemRow(date: today, taskId: $0.taskId, reason: $0.reason, rank: $0.rank) }
@@ -243,30 +240,19 @@ final class BoardViewModel {
 
     // MARK: - Brain Dump 确认流
 
-    /// AI 不可用时的 UI 提示；可用时为 nil。
-    var aiUnavailableHint: String? {
-        AIAvailabilityProbe.current.hint
-    }
-
+    /// 规则解析（同步、确定性），产出提案卡片待用户确认。
     func runBrainDump(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isParsingBrainDump else { return }
-        isParsingBrainDump = true
+        guard !trimmed.isEmpty else { return }
         brainDumpNotice = nil
-        NSLog("BoardApp: brain dump parse start (\(trimmed.count) chars)")
-        _Concurrency.Task { [weak self] in
-            let outcome = await BrainDumpParser.parse(trimmed)
-            guard let self else { return }
-            self.isParsingBrainDump = false
-            NSLog("BoardApp: brain dump parse done, \(outcome.proposals.count) proposals, fallback=\(outcome.usedFallback)")
-            if outcome.proposals.isEmpty {
-                self.brainDumpNotice = "没识别出任务，试试换个说法"
-                return
-            }
-            self.lastBrainDumpRaw = trimmed
-            self.lastAIOutputJSON = Self.jsonString(outcome.proposals) ?? "[]"
-            self.proposals = outcome.proposals
+        let parsed = BrainDumpParser.parse(trimmed)
+        if parsed.isEmpty {
+            brainDumpNotice = "没识别出任务，试试换个说法"
+            return
         }
+        lastBrainDumpRaw = trimmed
+        lastParsedJSON = Self.jsonString(parsed) ?? "[]"
+        proposals = parsed
     }
 
     /// 编辑提案卡片（标题/状态/日期/等待对象均就地修改）。
@@ -279,7 +265,7 @@ final class BoardViewModel {
         proposals.removeAll { $0.id == proposal.id }
     }
 
-    /// 确认入库：source=.braindump，并写 corrections（raw input + 原始产出 JSON + 最终确认 JSON）。
+    /// 确认入库：source=.braindump，并写 corrections（raw input + 解析产出 JSON + 最终确认 JSON）。
     /// 入库失败时保留提案，避免用户已确认的内容无声丢失。
     func confirmProposal(_ proposal: TaskProposal) {
         let persisted = perform("提案入库失败") {
@@ -293,7 +279,7 @@ final class BoardViewModel {
             try store.insertCorrection(
                 kind: .braindump,
                 rawInput: lastBrainDumpRaw,
-                aiOutput: lastAIOutputJSON,
+                aiOutput: lastParsedJSON,
                 finalOutput: Self.jsonString(proposal) ?? "{}"
             )
         }
@@ -321,36 +307,27 @@ final class BoardViewModel {
 
     /// 本次清理的提案列表（重复合并 / 停滞处置 / 项目成组），确认或忽略后移除
     var cleanupProposals: [CleanupProposal] = []
-    private(set) var isRunningCleanup = false
     /// 跑完但什么也没发现时的安静提示
     var cleanupNotice: String?
 
-    /// 跑一次智能清理：重复检测（AIParser 召回+判定）+ 停滞检测（RuleEngine 纯函数）。
+    /// 跑一次智能清理：重复检测 + 停滞检测（均 RuleEngine 纯规则）。
     /// 产物一律是提案卡片，不做任何静默修改。
     func runSmartCleanup() {
-        guard !isRunningCleanup else { return }
-        isRunningCleanup = true
         cleanupNotice = nil
         // 子任务不参与（随父卡管理）；done 不在清理视野内
         let snapshots = topLevelTasks.filter { $0.status != .done }.map(\.snapshot)
-        NSLog("BoardApp: smart cleanup start (\(snapshots.count) tasks)")
-        _Concurrency.Task { [weak self] in
-            let pairs = await DuplicateDetector.findDuplicates(tasks: snapshots)
-            guard let self else { return }
-            let stagnant = RuleEngine.stagnantTasks(for: snapshots, config: settings.cleanupConfig)
-            var proposals: [CleanupProposal] = pairs.map {
-                CleanupProposal(id: "dup-\($0.id)", kind: .duplicate($0))
-            }
-            proposals += Self.projectProposals(from: pairs, snapshots: snapshots)
-            proposals += stagnant.map {
-                CleanupProposal(id: "stag-\($0.id)", kind: .stagnant($0))
-            }
-            self.cleanupProposals = proposals
-            self.isRunningCleanup = false
-            if proposals.isEmpty {
-                self.cleanupNotice = "看板很干净，没发现重复或停滞任务"
-            }
-            NSLog("BoardApp: smart cleanup done, \(proposals.count) proposals")
+        let pairs = DuplicateDetector.findDuplicates(tasks: snapshots)
+        let stagnant = RuleEngine.stagnantTasks(for: snapshots, config: settings.cleanupConfig)
+        var proposals: [CleanupProposal] = pairs.map {
+            CleanupProposal(id: "dup-\($0.id)", kind: .duplicate($0))
+        }
+        proposals += Self.projectProposals(from: pairs, snapshots: snapshots)
+        proposals += stagnant.map {
+            CleanupProposal(id: "stag-\($0.id)", kind: .stagnant($0))
+        }
+        cleanupProposals = proposals
+        if proposals.isEmpty {
+            cleanupNotice = "看板很干净，没发现重复或停滞任务"
         }
     }
 
@@ -474,7 +451,7 @@ final class BoardViewModel {
 }
 
 /// Smart Cleanup 的一条清理提案（重复合并 / 停滞处置 / 项目成组）。
-/// 与 Brain Dump 提案同纪律：AI 产出必须经用户确认才落库。
+/// 与 Brain Dump 提案同纪律：产出必须经用户确认才落库。
 struct CleanupProposal: Identifiable, Equatable {
     enum Kind: Equatable {
         case duplicate(DuplicatePair)

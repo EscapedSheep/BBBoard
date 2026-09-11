@@ -33,6 +33,10 @@ final class AppSettings {
     var hotkeyEnabled: Bool {
         didSet { defaults.set(hotkeyEnabled, forKey: Keys.hotkeyEnabled) }
     }
+    /// 桌面看板收起（紧凑）时仍常驻显示 FOCUS 区
+    var focusPinnedInCompact: Bool {
+        didSet { defaults.set(focusPinnedInCompact, forKey: Keys.focusPinnedInCompact) }
+    }
 
     /// 全部阈值项的联合签名：任一变化都应触发派生数据重算
     var thresholdsSignature: Int {
@@ -78,6 +82,7 @@ final class AppSettings {
         self.doingTooLongDays = int(Keys.doingTooLongDays, RuleThresholds.default.doingTooLongDays)
         self.backlogStaleDays = int(Keys.backlogStaleDays, CleanupConfig.default.backlogStaleDays)
         self.hotkeyEnabled = defaults.object(forKey: Keys.hotkeyEnabled) as? Bool ?? true
+        self.focusPinnedInCompact = defaults.object(forKey: Keys.focusPinnedInCompact) as? Bool ?? true
     }
 
     private enum Keys {
@@ -87,5 +92,6 @@ final class AppSettings {
         static let doingTooLongDays = "BBBoard.doingTooLongDays"
         static let backlogStaleDays = "BBBoard.backlogStaleDays"
         static let hotkeyEnabled = "BBBoard.hotkeyEnabled"
+        static let focusPinnedInCompact = "BBBoard.focusPinnedInCompact"
     }
 }

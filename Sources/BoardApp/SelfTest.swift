@@ -1,14 +1,11 @@
-import AIParser
 import Foundation
+import RuleEngine
 import UserNotifications
 
-/// `BoardApp --selftest`：探测 Apple Intelligence 可用性并用真实模型跑样例 brain dump。
+/// `BoardApp --selftest`：用样例 brain dump 跑规则解析器。
 /// 仅开发期使用，不进 UI。
 enum SelfTest {
     static func run() async {
-        print("== AIAvailability: \(AIAvailabilityProbe.current)")
-        print("== hint: \(AIAvailabilityProbe.current.hint ?? "nil")")
-
         let samples = [
             "明天跟进 PRG 的 API key，等 Peter 回复。还有 invoice 接口的 bug 今天得修",
             "周五前把 customs XML 的测试跑完；下周三约 Hungary 团队确认需求，然后整理一下 backlog 里那些旧任务",
@@ -17,12 +14,11 @@ enum SelfTest {
 
         for sample in samples {
             print("\n--- input: \(sample)")
-            let outcome = await BrainDumpParser.parse(sample)
-            print("usedFallback: \(outcome.usedFallback)")
-            if outcome.proposals.isEmpty {
+            let proposals = BrainDumpParser.parse(sample)
+            if proposals.isEmpty {
                 print("  (no proposals)")
             }
-            for proposal in outcome.proposals {
+            for proposal in proposals {
                 let due = proposal.dueDate.map { $0.formatted(.dateTime.year().month(.wide).day().locale(Locale(identifier: "zh_CN"))) } ?? "nil"
                 print("  • [\(proposal.status.rawValue)] \(proposal.title) | dueText=\(proposal.dueText ?? "nil") → \(due) | waitingOn=\(proposal.waitingOn ?? "nil")")
             }

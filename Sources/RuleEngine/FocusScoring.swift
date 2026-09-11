@@ -76,12 +76,6 @@ public struct FocusItem: Sendable, Equatable, Identifiable {
     }
 }
 
-/// M3 计划中的可选 LLM 重排挂点（当前未启用，Apple Intelligence 不可用时无意义）。
-/// 实现者在 TaskStore/视图层算出规则版 Top N 后调用 rerank 即可。
-public protocol FocusReranker: Sendable {
-    func rerank(_ items: [FocusItem]) async -> [FocusItem]
-}
-
 extension RuleEngine {
     /// 计算 Daily Focus：非 done 任务按多因子加权打分，取 Top N（默认 3）。
     /// 零分任务（无截止/非 waiting/非 doing/无近期活跃）不入选——宁缺毋滥。

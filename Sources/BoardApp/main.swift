@@ -1,7 +1,6 @@
 import AppKit
 
-// 开发期自检：`BoardApp --selftest` 探测 Apple Intelligence 并跑真实解析样例，不进 App。
-// 注意：不能信号量阻塞主线程——FoundationModels 内部依赖主 runloop/主队列，阻塞会死锁。
+// 开发期自检：`BoardApp --selftest` 跑样例解析与通知探针，不进 App。
 if CommandLine.arguments.contains("--selftest") {
     setbuf(stdout, nil) // 管道输出不缓冲，实时可见
     _Concurrency.Task {

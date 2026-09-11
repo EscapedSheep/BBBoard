@@ -1,7 +1,5 @@
 import Foundation
-import FoundationModels
 import NaturalLanguage
-import RuleEngine
 
 /// 召回阶段产出的一对疑似重复任务
 public struct DuplicateCandidate: Sendable, Equatable, Identifiable {
@@ -25,32 +23,29 @@ public struct DuplicateCandidate: Sendable, Equatable, Identifiable {
 /// 判定后输出给用户的一对重复任务（含理由）
 public struct DuplicatePair: Sendable, Equatable, Identifiable {
     public var candidate: DuplicateCandidate
-    /// 中文理由（LLM 给出，或降级路径的固定文案）
+    /// 中文理由（规则路径的固定文案）
     public var reason: String
-    /// true = 未经 LLM 确认（降级路径），UI 可弱化呈现
-    public var unverified: Bool
     public var id: String { candidate.id }
 
-    public init(candidate: DuplicateCandidate, reason: String, unverified: Bool) {
+    public init(candidate: DuplicateCandidate, reason: String) {
         self.candidate = candidate
         self.reason = reason
-        self.unverified = unverified
     }
 }
 
-/// M4 Smart Cleanup：重复任务检测。
-/// 召回双路（词向量平均池化 cosine + 分词集合 Jaccard），宁误报勿漏报；
-/// 精排由 LLM 逐对判定剔除「字面重叠但语义不同」的对；AI 不可用时走保守规则降级。
+/// Smart Cleanup：重复任务检测，纯规则。
+/// 召回双路（词向量平均池化 cosine + 分词集合 Jaccard），再经保守规则过滤
+/// （Jaccard ≥ 0.8 或归一化标题相等），误报宁少勿多。
 /// 注意：NLEmbedding.sentenceEmbedding 中文不可用（实验已否决），这里只用 wordEmbedding。
 public enum DuplicateDetector {
     /// 词向量平均池化 cosine 召回阈值（实验选型结论）
     static let cosineThreshold = 0.25
     /// 分词集合 Jaccard 召回阈值（实验选型结论）
     static let jaccardThreshold = 0.5
-    /// 降级路径的保守 Jaccard 阈值（误报宁少勿多）
-    static let fallbackJaccardThreshold = 0.8
+    /// 出提案的保守 Jaccard 阈值（误报宁少勿多）
+    static let pairJaccardThreshold = 0.8
 
-    /// 纯召回（无 AI 依赖，可单测）：双路召回合并去重，按 similarity 降序。
+    /// 纯召回（可单测）：双路召回合并去重，按 similarity 降序。
     /// 只比较非 done 任务；同一对只出现一次（id 小者在前）。
     public static func recallCandidates(tasks: [TaskSnapshot], maxPairs: Int = 20) -> [DuplicateCandidate] {
         guard maxPairs > 0 else { return [] }
@@ -80,79 +75,25 @@ public enum DuplicateDetector {
         }.prefix(maxPairs))
     }
 
-    /// 完整管线：召回 → AI 可用时逐对 LLM 判定；不可用/出错时降级保守规则。
-    public static func findDuplicates(tasks: [TaskSnapshot]) async -> [DuplicatePair] {
-        let candidates = recallCandidates(tasks: tasks)
-        guard !candidates.isEmpty else { return [] }
-
-        guard AIAvailabilityProbe.current == .available else {
-            return fallbackPairs(candidates)
-        }
-
-        var pairs: [DuplicatePair] = []
-        for candidate in candidates {
-            do {
-                let judgement = try await judge(candidate)
-                if judgement.isDuplicate {
-                    pairs.append(DuplicatePair(
-                        candidate: candidate, reason: judgement.reason, unverified: false))
-                }
-            } catch {
-                // GuardrailViolation / 模型未就绪等：该对走保守降级规则
-                NSLog("BoardApp: 重复判定失败（\(error)），降级保守规则")
-                if conservativePass(candidate) {
-                    pairs.append(DuplicatePair(
-                        candidate: candidate, reason: "标题高度相似", unverified: true))
-                }
+    /// 完整管线：召回 → 保守规则过滤（只保留 Jaccard ≥ 0.8 或归一化标题相等的对）。
+    public static func findDuplicates(tasks: [TaskSnapshot]) -> [DuplicatePair] {
+        recallCandidates(tasks: tasks)
+            .filter(conservativePass)
+            .map { DuplicatePair(candidate: $0, reason: "标题高度相似") }
+            .sorted {
+                $0.candidate.similarity != $1.candidate.similarity
+                    ? $0.candidate.similarity > $1.candidate.similarity
+                    : $0.id < $1.id
             }
-        }
-        return pairs.sorted {
-            $0.candidate.similarity != $1.candidate.similarity
-                ? $0.candidate.similarity > $1.candidate.similarity
-                : $0.id < $1.id
-        }
     }
 
-    // MARK: - LLM 判定
-
-    @Generable
-    struct Judgement {
-        @Guide(description: "两条任务是否指向同一事项；只有合并掉其中一条完全无害（不丢失任何信息）时才为 true")
-        var isDuplicate: Bool
-        @Guide(description: "用中文一句话说明判断理由")
-        var reason: String
-    }
-
-    /// 每对独立 session：候选已按 similarity 排序且 maxPairs 封顶，成本可控。
-    private static func judge(_ candidate: DuplicateCandidate) async throws -> Judgement {
-        let instructions = """
-        你是重复任务判定助手。判断两条任务是否指向同一事项。
-        - 人名、时间、对象、数字任一不同，即不是重复。
-        - 仅字面高度重叠不算重复，要看语义是否同一件事。
-        - 只有合并掉其中一条完全无害（不丢失任何信息）时才判定为重复。
-        - reason 用中文一句话说明判断理由。
-        """
-        let session = LanguageModelSession(instructions: instructions)
-        let prompt = "任务一：\(candidate.firstTitle)\n任务二：\(candidate.secondTitle)"
-        let response = try await session.respond(to: prompt, generating: Judgement.self)
-        return response.content
-    }
-
-    // MARK: - 降级路径
-
-    /// AI 不可用时的保守规则：只保留 Jaccard ≥ 0.8 或归一化标题相等的对。
-    private static func fallbackPairs(_ candidates: [DuplicateCandidate]) -> [DuplicatePair] {
-        candidates.filter(conservativePass).map {
-            DuplicatePair(candidate: $0, reason: "标题高度相似", unverified: true)
-        }
-    }
-
+    /// 保守规则：只保留 Jaccard ≥ 0.8 或归一化标题相等的对。
     private static func conservativePass(_ candidate: DuplicateCandidate) -> Bool {
         let a = normalize(candidate.firstTitle)
         let b = normalize(candidate.secondTitle)
         if !a.isEmpty, a == b { return true }
         return jaccard(tokenSet(candidate.firstTitle), tokenSet(candidate.secondTitle))
-            >= fallbackJaccardThreshold
+            >= pairJaccardThreshold
     }
 
     // MARK: - 召回打分

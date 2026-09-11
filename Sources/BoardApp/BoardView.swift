@@ -1,4 +1,3 @@
-import AIParser
 import RuleEngine
 import SwiftUI
 import TaskStore
@@ -158,7 +157,12 @@ struct BoardView: View {
                     .background(GeometryReader { geo in
                         Color.clear.preference(key: HeaderHeightKey.self, value: geo.size.height)
                     })
-                if !isCompact {
+                if isCompact {
+                    // 紧凑态可选常驻 FOCUS 区（AppSettings 开关，菜单栏可切），纯展示
+                    if viewModel.settings.focusPinnedInCompact, !viewModel.focusItems.isEmpty {
+                        focusSection
+                    }
+                } else {
                     if !viewModel.focusItems.isEmpty {
                         focusSection
                     }
@@ -170,7 +174,7 @@ struct BoardView: View {
                     if !viewModel.proposals.isEmpty {
                         proposalsSection
                     }
-                    if !viewModel.cleanupProposals.isEmpty || viewModel.isRunningCleanup {
+                    if !viewModel.cleanupProposals.isEmpty {
                         cleanupSection
                     }
                     if let notice = viewModel.brainDumpNotice ?? viewModel.cleanupNotice {
@@ -223,6 +227,7 @@ struct BoardView: View {
     private func accent(for status: TaskStatus) -> Color { statusAccent(status) }
 
     /// 状态字形 + 天数环（任务卡与 FOCUS 行共用同一视觉语言）。
+    /// 环顶小球 = 已越过该卡应遵守的时间线（逾期红 / 超阈值橙，阈值与建议区同一套）。
     @ViewBuilder
     private func statusGlyphWithRing(_ task: Task, ringSize: CGFloat = 22, glyphSize: CGFloat = 12) -> some View {
         ZStack {
@@ -238,6 +243,13 @@ struct BoardView: View {
                     .trim(from: 0, to: ring.progress)
                     .stroke(ring.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
+                // 越线警报球：钉在 12 点的环线上
+                if let marker = ring.marker {
+                    Circle()
+                        .fill(marker)
+                        .frame(width: ringSize * 0.28, height: ringSize * 0.28)
+                        .offset(y: -ringSize / 2)
+                }
             }
             Image(systemName: glyph(for: task.status))
                 .font(.system(size: glyphSize))
@@ -478,7 +490,7 @@ struct BoardView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "sparkles")
                         .font(.caption)
-                    Text("倒一下脑子里的事…（AI 自动整理）")
+                    Text("倒一下脑子里的事…（自动整理）")
                         .font(.caption)
                     Spacer()
                     Image(systemName: brainDumpOpen ? "chevron.up" : "chevron.down")
@@ -499,20 +511,11 @@ struct BoardView: View {
                     .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .onTapGesture { onRequestKeyboard?() }
                 HStack {
-                    if let hint = viewModel.aiUnavailableHint {
-                        Text(hint)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
                     Spacer()
-                    if viewModel.isParsingBrainDump {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
                     Button("整理") { submitBrainDump() }
                         .font(.caption)
                         .buttonStyle(.borderless)
-                        .disabled(brainDumpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isParsingBrainDump)
+                        .disabled(brainDumpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -967,10 +970,6 @@ struct BoardView: View {
                     .foregroundStyle(.secondary)
                     .tracking(0.6)
                 Spacer()
-                if viewModel.isRunningCleanup {
-                    ProgressView()
-                        .controlSize(.small)
-                }
             }
             .padding(.horizontal, 8)
             .padding(.bottom, 2)
@@ -1004,11 +1003,6 @@ struct BoardView: View {
                 Text("疑似重复")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                if pair.unverified {
-                    Text("未经 AI 确认")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
                 Spacer()
             }
             Text(pair.candidate.firstTitle)
@@ -1185,23 +1179,27 @@ struct BoardView: View {
     /// 等待中的卡按"等待超时"设置计时（橙色弧）；没设时间的卡走"年龄环"：每 7 天一圈，
     /// 长满换色继续画（灰 → 蓝 → 橙 → 红），上一圈以浅色留底，28 天后红满环封顶。
     /// underlay = 上一圈的颜色（以浅色整圈留底），无则 nil。
-    private func timeRing(for task: Task) -> (progress: Double, color: Color, underlay: Color?)? {
+    /// marker = 环顶警报球：已逾期 → 红；waiting/doing/backlog 超过各自停滞阈值（与建议区同套设置）→ 橙；未越线 nil。
+    private func timeRing(for task: Task) -> (progress: Double, color: Color, underlay: Color?, marker: Color?)? {
         guard task.status != .done else { return nil }
         let now = Date()
         if let due = task.dueDate {
             let days = dayDiff(from: now, to: due)
-            if days < 0 { return (1, .red, nil) }
+            if days < 0 { return (1, .red, nil, .red) }
             // 倒计时进度 = 已消耗的时间占这张卡 创建→截止 总跨度的比例（防除零至少 1 小时）
             let total = max(due.timeIntervalSince(task.createdAt), 3600)
             let elapsed = now.timeIntervalSince(task.createdAt)
             let nearDue = days <= viewModel.settings.dueApproachingDays
             // 满环留给"已逾期"：未到截止最多 95%；临近的卡给个弧长下限保证可读
             let progress = nearDue ? min(0.95, max(0.3, elapsed / total)) : min(0.95, max(0.04, elapsed / total))
-            return (progress, nearDue ? .orange : .secondary, nil)
+            return (progress, nearDue ? .orange : .secondary, nil, nil)
         }
         if task.status == .waiting, let since = task.waitingSince {
             let days = dayDiff(from: since, to: now)
-            if days > 0 { return (min(1, Double(days) / Double(viewModel.settings.waitingTooLongDays)), .orange, nil) }
+            if days > 0 {
+                let overdue = days >= viewModel.settings.waitingTooLongDays
+                return (min(1, Double(days) / Double(viewModel.settings.waitingTooLongDays)), .orange, nil, overdue ? .orange : nil)
+            }
         }
         // 年龄环：每 7 天一圈，长满一圈换色在原圈上继续画；上一圈浅色留底
         let age = now.timeIntervalSince(task.createdAt)
@@ -1210,7 +1208,15 @@ struct BoardView: View {
         let lapColors: [Color] = [.secondary, .blue, .orange, .red]
         let lapIndex = min(lap, lapColors.count - 1)
         let progress = lap >= lapColors.count ? 1 : max(0.04, age.truncatingRemainder(dividingBy: lapLength) / lapLength)
-        return (progress, lapColors[lapIndex], lapIndex > 0 ? lapColors[lapIndex - 1] : nil)
+        // doing/backlog 停滞阈值（与建议区、智能清理同一套设置）
+        var marker: Color?
+        let staleDays = dayDiff(from: task.updatedAt, to: now)
+        if task.status == .doing, staleDays >= viewModel.settings.doingTooLongDays {
+            marker = .orange
+        } else if task.status == .backlog, staleDays >= viewModel.settings.backlogStaleDays {
+            marker = .orange
+        }
+        return (progress, lapColors[lapIndex], lapIndex > 0 ? lapColors[lapIndex - 1] : nil, marker)
     }
 
     private func badge(_ text: String, color: Color) -> some View {

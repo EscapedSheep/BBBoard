@@ -1,9 +1,7 @@
 import Foundation
-import RuleEngine
 
-/// 降级解析器：AI 不可用（或出错）时的规则实现。
-/// 按标点切分 + 连词剥离 + 日期规则 + “等X”等待规则，产出与 AI 同构的提案。
-public enum FallbackParser {
+/// Brain Dump 规则解析器：按标点切分 + 连词剥离 + 日期规则 + “等X”等待规则。
+public enum BrainDumpParser {
     private static let separatorRegex = try! NSRegularExpression(
         pattern: "[。，；、,;!！?？\n]+|(?i:\\s+and\\s+)|(?i:\\s+also\\s+)"
     )

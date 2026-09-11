@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# xcode-select 指向 CommandLineTools 时 swift build 会缺 FoundationModels 插件（见 HANDOVER §1）
+# 防御：xcode-select 指向 CommandLineTools 时历史上有过插件缺失问题（HANDOVER §1），
+# 现已无 FoundationModels 依赖，此行仅为保险
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 APP="$HOME/Applications/BBBoard.app"
@@ -33,8 +34,8 @@ if [ ! -f "$APP/Contents/Info.plist" ]; then
 	<key>CFBundleIdentifier</key><string>dev.bbboard.app</string>
 	<key>CFBundleName</key><string>BBBoard</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.3.0</string>
-	<key>CFBundleVersion</key><string>3</string>
+	<key>CFBundleShortVersionString</key><string>0.4.0</string>
+	<key>CFBundleVersion</key><string>4</string>
 	<key>LSMinimumSystemVersion</key><string>26.0</string>
 	<key>LSUIElement</key><true/>
 </dict>

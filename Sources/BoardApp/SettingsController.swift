@@ -68,12 +68,24 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Stepper("Focus 条数：\(settings.focusMaxItems)", value: $settings.focusMaxItems, in: 1...5)
-            Stepper("截止临近提醒：\(settings.dueApproachingDays) 天内", value: $settings.dueApproachingDays, in: 1...7)
-            Stepper("等待超时：\(settings.waitingTooLongDays) 天", value: $settings.waitingTooLongDays, in: 2...14)
-            Stepper("进行中停滞：\(settings.doingTooLongDays) 天", value: $settings.doingTooLongDays, in: 3...21)
-            Stepper("Backlog 停滞：\(settings.backlogStaleDays) 天", value: $settings.backlogStaleDays, in: 14...90)
-            Toggle("全局快捷键 ⌥Space", isOn: $settings.hotkeyEnabled)
+            explained("顶部 FOCUS 区最多显示的条数") {
+                Stepper("Focus 条数：\(settings.focusMaxItems)", value: $settings.focusMaxItems, in: 1...5)
+            }
+            explained("距截止进入该天数后：任务卡的天数环变橙，并产生「临近截止」建议") {
+                Stepper("截止临近提醒：\(settings.dueApproachingDays) 天内", value: $settings.dueApproachingDays, in: 1...7)
+            }
+            explained("等待超过该天数：任务卡的橙色弧长满，并产生「等太久」建议与清理提案") {
+                Stepper("等待超时：\(settings.waitingTooLongDays) 天", value: $settings.waitingTooLongDays, in: 2...14)
+            }
+            explained("进行中超过该天数未更新，产生「做太久」建议与清理提案") {
+                Stepper("进行中停滞：\(settings.doingTooLongDays) 天", value: $settings.doingTooLongDays, in: 3...21)
+            }
+            explained("Backlog 超过该天数未动，智能清理时提议处置") {
+                Stepper("Backlog 停滞：\(settings.backlogStaleDays) 天", value: $settings.backlogStaleDays, in: 14...90)
+            }
+            explained("呼出/收起面板；关闭后只能从菜单栏图标打开") {
+                Toggle("全局快捷键 ⌥Space", isOn: $settings.hotkeyEnabled)
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -83,6 +95,16 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: settings.hotkeyEnabled) { _, enabled in
             onHotkeyToggle(enabled)
+        }
+    }
+
+    /// 设置项 + 常驻说明文字（非激活面板上 hover tooltip 不可靠，说明直接摆出来）
+    private func explained<Content: View>(_ caption: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            content()
+            Text(caption)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }

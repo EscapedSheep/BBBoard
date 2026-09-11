@@ -1,8 +1,7 @@
 import XCTest
-@testable import AIParser
-import RuleEngine
+@testable import RuleEngine
 
-/// DuplicateDetector 召回阶段测试（LLM 判定不可测，不在此覆盖）。
+/// DuplicateDetector 召回阶段测试。
 /// 语料模式与 EmbeddingExperimentTests 一致；NLEmbedding 在测试环境可用（实验已验证）。
 final class DuplicateDetectorTests: XCTestCase {
 

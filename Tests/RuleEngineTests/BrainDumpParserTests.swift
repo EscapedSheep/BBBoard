@@ -1,9 +1,8 @@
 import Foundation
-import RuleEngine
 import XCTest
-@testable import AIParser
+@testable import RuleEngine
 
-final class FallbackParserTests: XCTestCase {
+final class BrainDumpParserTests: XCTestCase {
     private let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
@@ -13,16 +12,16 @@ final class FallbackParserTests: XCTestCase {
     private lazy var now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 2, hour: 12))!
 
     private func parse(_ text: String) -> [TaskProposal] {
-        FallbackParser.parse(text, now: now, calendar: calendar)
+        BrainDumpParser.parse(text, now: now, calendar: calendar)
     }
 
     func testFragmentsSplitOnPunctuation() {
-        let fragments = FallbackParser.fragments(of: "处理 PRG。看看 TEMU，修 invoice bug")
+        let fragments = BrainDumpParser.fragments(of: "处理 PRG。看看 TEMU，修 invoice bug")
         XCTAssertEqual(fragments, ["处理 PRG", "看看 TEMU", "修 invoice bug"])
     }
 
     func testFragmentsStripLeadingConjunctions() {
-        let fragments = FallbackParser.fragments(of: "今天处理 PRG，还有 TEMU 的问题，然后找找 Hungary")
+        let fragments = BrainDumpParser.fragments(of: "今天处理 PRG，还有 TEMU 的问题，然后找找 Hungary")
         XCTAssertEqual(fragments, ["今天处理 PRG", "TEMU 的问题", "找找 Hungary"])
     }
 

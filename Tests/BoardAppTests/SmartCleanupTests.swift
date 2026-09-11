@@ -1,4 +1,3 @@
-import AIParser
 import Foundation
 import GRDB
 import RuleEngine
@@ -6,10 +5,9 @@ import TaskStore
 @testable import BoardApp
 import XCTest
 
-/// M4 Smart Cleanup 编排逻辑测试。
-/// LLM 判定（FoundationModels）不可测、不覆盖；这里覆盖：
-/// recall 结果处理与 AI 不可用时的降级判定（经 runSmartCleanup）、
-/// resolve*/confirm* 纯本地动作、并查集聚类 projectProposals 与 commonPrefix。
+/// M4 Smart Cleanup 编排逻辑测试（全规则，无外部依赖）。
+/// 覆盖：重复检测（经 runSmartCleanup）、resolve*/confirm* 纯本地动作、
+/// 并查集聚类 projectProposals 与 commonPrefix。
 @MainActor
 final class SmartCleanupTests: XCTestCase {
     private var store: TaskStore!
@@ -85,7 +83,6 @@ final class SmartCleanupTests: XCTestCase {
 
         viewModel.runSmartCleanup()
 
-        await waitUntil("清理完成") { !self.viewModel.isRunningCleanup }
         XCTAssertNil(viewModel.cleanupNotice)
         let stagnant = stagnantItems()
         XCTAssertEqual(stagnant.count, 3)
@@ -100,45 +97,37 @@ final class SmartCleanupTests: XCTestCase {
 
         viewModel.runSmartCleanup()
 
-        await waitUntil("清理完成且提示出现") {
-            !self.viewModel.isRunningCleanup && self.viewModel.cleanupNotice != nil
-        }
+        XCTAssertNotNil(viewModel.cleanupNotice)
         XCTAssertTrue(viewModel.cleanupProposals.isEmpty)
         XCTAssertEqual(viewModel.cleanupNotice, "看板很干净，没发现重复或停滞任务")
     }
 
-    // MARK: - runSmartCleanup：AI 不可用的降级判定（Jaccard≥0.8 / 归一化相等，标 unverified）
+    // MARK: - runSmartCleanup：重复判定（Jaccard≥0.8 / 归一化相等）
 
-    /// 归一化相等（仅标点差异）的标题走保守降级规则，产出 unverified 的重复提案。
-    func testRunSmartCleanupFallbackDuplicateWhenAIUnavailable() async throws {
-        try XCTSkipUnless(AIAvailabilityProbe.current != .available, "仅覆盖 AI 不可用的降级路径")
+    /// 归一化相等（仅标点差异）的标题命中保守规则，产出重复提案。
+    func testRunSmartCleanupDetectsNormalizedDuplicate() async throws {
         let a = try await makeTask(title: "买牛奶")
         let b = try await makeTask(title: "买牛奶！")
 
         viewModel.runSmartCleanup()
 
-        await waitUntil("清理完成") { !self.viewModel.isRunningCleanup }
         let pairs = duplicatePairs()
         XCTAssertEqual(pairs.count, 1)
         let pair = try XCTUnwrap(pairs.first)
-        XCTAssertTrue(pair.unverified, "降级路径未经 LLM 确认，应标 unverified")
         XCTAssertEqual(pair.reason, "标题高度相似")
         XCTAssertEqual(Set([pair.candidate.firstID, pair.candidate.secondID]), [a.id!, b.id!])
     }
 
     /// 三条归一化相等的标题：三对重复 + 一个连通分量（3 个任务）聚出的项目成组提案。
     func testRunSmartCleanupClustersDuplicateTripleIntoProjectProposal() async throws {
-        try XCTSkipUnless(AIAvailabilityProbe.current != .available, "仅覆盖 AI 不可用的降级路径")
         let a = try await makeTask(title: "周报 2025")
         let b = try await makeTask(title: "周报2025")
         let c = try await makeTask(title: "周报：2025")
 
         viewModel.runSmartCleanup()
 
-        await waitUntil("清理完成") { !self.viewModel.isRunningCleanup }
         let pairs = duplicatePairs()
         XCTAssertEqual(pairs.count, 3)
-        XCTAssertTrue(pairs.allSatisfy(\.unverified))
 
         let projects = viewModel.cleanupProposals.filter {
             if case .project = $0.kind { return true }
@@ -166,7 +155,7 @@ final class SmartCleanupTests: XCTestCase {
                 firstID: keep.id!, secondID: drop.id!,
                 firstTitle: keep.title, secondTitle: drop.title, similarity: 1.0
             ),
-            reason: "标题高度相似", unverified: true
+            reason: "标题高度相似"
         )
 
         viewModel.resolveDuplicate(CleanupProposal(id: "dup-\(pair.id)", kind: .duplicate(pair)), keepFirst: true)
@@ -191,7 +180,7 @@ final class SmartCleanupTests: XCTestCase {
                 firstID: first.id!, secondID: second.id!,
                 firstTitle: first.title, secondTitle: second.title, similarity: 1.0
             ),
-            reason: "标题高度相似", unverified: true
+            reason: "标题高度相似"
         )
 
         viewModel.resolveDuplicate(CleanupProposal(id: "dup-\(pair.id)", kind: .duplicate(pair)), keepFirst: false)
@@ -213,7 +202,6 @@ final class SmartCleanupTests: XCTestCase {
         let waiting = try await makeTask(title: "催供应商报价", status: .waiting, waitingOn: "供应商", daysAgo: 10)
 
         viewModel.runSmartCleanup()
-        await waitUntil("清理完成") { !self.viewModel.isRunningCleanup }
 
         func proposal(for taskId: Int64) -> CleanupProposal? {
             viewModel.cleanupProposals.first {
@@ -244,7 +232,6 @@ final class SmartCleanupTests: XCTestCase {
     func testResolveStagnantFailureKeepsProposal() async throws {
         let task = try await makeTask(title: "整理会议纪要", status: .backlog, daysAgo: 45)
         viewModel.runSmartCleanup()
-        await waitUntil("清理完成") { !self.viewModel.isRunningCleanup }
         let proposal = try XCTUnwrap(viewModel.cleanupProposals.first)
 
         try store.deleteTask(id: task.id!) // 先删掉，制造 taskNotFound 失败
@@ -258,7 +245,6 @@ final class SmartCleanupTests: XCTestCase {
     func testDismissCleanupRemovesProposalOnly() async throws {
         let task = try await makeTask(title: "整理会议纪要", status: .backlog, daysAgo: 45)
         viewModel.runSmartCleanup()
-        await waitUntil("清理完成") { !self.viewModel.isRunningCleanup }
         let proposal = try XCTUnwrap(viewModel.cleanupProposals.first)
 
         viewModel.dismissCleanup(proposal)
@@ -330,7 +316,7 @@ final class SmartCleanupTests: XCTestCase {
                 candidate: DuplicateCandidate(
                     firstID: a, secondID: b, firstTitle: "任务\(a)", secondTitle: "任务\(b)", similarity: 1.0
                 ),
-                reason: "r", unverified: true
+                reason: "r"
             )
         }
 

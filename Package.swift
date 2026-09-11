@@ -14,10 +14,6 @@ let package = Package(
             name: "RuleEngine"
         ),
         .target(
-            name: "AIParser",
-            dependencies: ["RuleEngine"]
-        ),
-        .target(
             name: "TaskStore",
             dependencies: [
                 "RuleEngine",
@@ -28,8 +24,7 @@ let package = Package(
             name: "BoardApp",
             dependencies: [
                 "RuleEngine",
-                "TaskStore",
-                "AIParser"
+                "TaskStore"
             ]
         ),
         .testTarget(
@@ -39,10 +34,6 @@ let package = Package(
         .testTarget(
             name: "TaskStoreTests",
             dependencies: ["TaskStore", "RuleEngine"]
-        ),
-        .testTarget(
-            name: "AIParserTests",
-            dependencies: ["AIParser", "RuleEngine"]
         ),
         .testTarget(
             name: "BoardAppTests",
