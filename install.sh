@@ -34,8 +34,8 @@ if [ ! -f "$APP/Contents/Info.plist" ]; then
 	<key>CFBundleIdentifier</key><string>dev.bbboard.app</string>
 	<key>CFBundleName</key><string>BBBoard</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.4.0</string>
-	<key>CFBundleVersion</key><string>4</string>
+	<key>CFBundleShortVersionString</key><string>0.5.0</string>
+	<key>CFBundleVersion</key><string>5</string>
 	<key>LSMinimumSystemVersion</key><string>26.0</string>
 	<key>LSUIElement</key><true/>
 </dict>

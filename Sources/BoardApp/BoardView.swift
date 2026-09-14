@@ -37,6 +37,10 @@ struct BoardView: View {
     @State private var selectedTaskID: Int64?
     @State private var chromeHeight: CGFloat = 0
     @State private var sectionsHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
+    /// 各列内容的自然高度（FadingScrollView 逐列回报），desktop 理想高度取最高列
+    @State private var columnContentHeights: [TaskStatus: CGFloat] = [:]
+    @State private var columnHeaderHeight: CGFloat = 0
     @State private var dropTargetSection: TaskStatus?
     @State private var showClearDoneConfirm = false
     @State private var brainDumpOpen = false
@@ -83,6 +87,8 @@ struct BoardView: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .onPreferenceChange(ChromeHeightKey.self) { chromeHeight = $0; reportIdealHeight() }
         .onPreferenceChange(SectionsHeightKey.self) { sectionsHeight = $0; reportIdealHeight() }
+        .onPreferenceChange(FooterHeightKey.self) { footerHeight = $0; reportIdealHeight() }
+        .onPreferenceChange(ColumnHeaderHeightKey.self) { columnHeaderHeight = $0; reportIdealHeight() }
         .onPreferenceChange(HeaderHeightKey.self) { desktopState?.headerHeight = $0 }
         .onAppear { viewModel.refreshFocusIfDayChanged() }
         // 设置页调整阈值/Focus 条数后重算派生数据
@@ -197,13 +203,10 @@ struct BoardView: View {
             })
 
             if !isCompact {
-                ScrollView {
-                    sections
-                        .background(GeometryReader { geo in
-                            Color.clear.preference(key: SectionsHeightKey.self, value: geo.size.height)
-                        })
-                }
-                .scrollIndicators(style == .desktop ? .hidden : .automatic)
+                // 三列各自独立滚动（FadingScrollView），不再有整体滚动区
+                sections
+                // backlog/done 钉在底部不随三列滚动：卡片再多也始终可达
+                pinnedSections
             }
         }
     }
@@ -214,10 +217,20 @@ struct BoardView: View {
         if isCompact {
             ideal = chromeHeight
         } else {
-            let budget = maxHeight.isFinite ? max(160, maxHeight - chromeHeight) : sectionsHeight
-            ideal = chromeHeight + min(sectionsHeight, budget)
+            let budget = maxHeight.isFinite ? max(160, maxHeight - chromeHeight - footerHeight) : sectionsIdealHeight
+            ideal = chromeHeight + footerHeight + min(sectionsIdealHeight, budget)
         }
         onIdealHeightChange?(ideal)
+    }
+
+    /// 三列区的理想高度 = 最高列内容的自然高度 + 列头/间距/内边距。
+    /// 列内容自然高度由各列的 FadingScrollView 回报（见 column()）；空看板回退占位文案实测高度。
+    private var sectionsIdealHeight: CGFloat {
+        guard hasVisibleTasks, let tallest = columnContentHeights.values.max() else {
+            return sectionsHeight + 22 // sections 上下内边距 10+12
+        }
+        // 列头 + 列头与列表间距 2 + 列内边距 4×2 + sections 上下内边距 10+12
+        return tallest + columnHeaderHeight + 2 + 8 + 22
     }
 
     // MARK: - 状态字形与配色（呼应概念稿的 □ / ● / ◌ 语言）
@@ -584,10 +597,6 @@ struct BoardView: View {
                     column(.doing)
                     column(.waiting)
                 }
-                backlogSection
-                if !viewModel.tasks(in: .done).isEmpty {
-                    doneSection
-                }
             } else {
                 // 空看板展开态：安静的占位，引导用上方输入框添加第一条
                 Text("无任务，在上方输入第一条")
@@ -595,32 +604,70 @@ struct BoardView: View {
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: SectionsHeightKey.self, value: geo.size.height)
+                    })
             }
         }
+        // 吃掉窗口剩余空间并保持顶对齐（空看板时头部不至于垂直居中漂移）
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 10)
         .padding(.top, 10)
         .padding(.bottom, 12)
+    }
+
+    /// 底部常驻分区：backlog / done 在三列滚动区之外，不随卡片增多被挤出视野。
+    /// 高度计入 FooterHeightKey，参与 desktop 窗口自适应（见 reportIdealHeight）。
+    @ViewBuilder
+    private var pinnedSections: some View {
+        if hasVisibleTasks {
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                    .padding(.horizontal, 12)
+                backlogSection
+                if !viewModel.tasks(in: .done).isEmpty {
+                    doneSection
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: FooterHeightKey.self, value: geo.size.height)
+            })
+        }
     }
 
     private var hasVisibleTasks: Bool {
         viewModel.tasks.contains { $0.status != .done }
     }
 
+    /// 单列：列头固定不动，卡片列表在列内独立滚动（FadingScrollView 自带边缘渐隐提示）。
     private func column(_ status: TaskStatus) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             sectionHeader(status)
-            ForEach(viewModel.tasks(in: status)) { task in
-                taskRow(task)
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: ColumnHeaderHeightKey.self, value: geo.size.height)
+                })
+            FadingScrollView(
+                showsIndicators: style == .peek,
+                onContentHeightChange: { height in
+                    columnContentHeights[status] = height
+                    reportIdealHeight()
+                }
+            ) {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(viewModel.tasks(in: status)) { task in
+                        taskRow(task)
+                    }
+                    if viewModel.tasks(in: status).isEmpty {
+                        Text("拖任务到这里")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 8)
+                    }
+                }
             }
-            if viewModel.tasks(in: status).isEmpty {
-                Text("拖任务到这里")
-                    .font(.caption2)
-                    .foregroundStyle(.quaternary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 8)
-            }
-            // 空列也保持完整拖放面积（HStack 内各列等高，由最高列撑开）
-            Spacer(minLength: 48)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(4)
@@ -649,11 +696,15 @@ struct BoardView: View {
 
     private var backlogSection: some View {
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(viewModel.tasks(in: .backlog)) { task in
-                    taskRow(task)
+            // 钉在底部的分区要自己限高：展开很多 backlog 时内部滚动，不把三列挤没
+            FadingScrollView(showsIndicators: style == .peek) {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(viewModel.tasks(in: .backlog)) { task in
+                        taskRow(task)
+                    }
                 }
             }
+            .frame(maxHeight: 200)
         } label: {
             sectionHeader(.backlog)
         }
@@ -679,11 +730,15 @@ struct BoardView: View {
         let doneTasks = viewModel.tasks(in: .done)
             .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
         return DisclosureGroup {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(doneTasks) { task in
-                    taskRow(task)
+            // 与 backlog 同理：钉底分区限高，展开长列表时内部滚动
+            FadingScrollView(showsIndicators: style == .peek) {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(doneTasks) { task in
+                        taskRow(task)
+                    }
                 }
             }
+            .frame(maxHeight: 200)
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: glyph(for: .done))
@@ -1252,6 +1307,78 @@ private struct SectionsHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+private struct FooterHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// 列头高度（三列一致，取 max 只为合规 reduce）
+private struct ColumnHeaderHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+// MARK: - 独立滚动容器（三列各滚各的）
+
+/// 带边缘渐隐提示的滚动容器：哪一边还有被裁掉的内容，那一边就淡出提示，滚到顶/底渐隐消失。
+/// 三列每列持有一个实例（滚动与渐隐状态各自独立）；底部钉住的 backlog/done 列表也复用它。
+private struct FadingScrollView<Content: View>: View {
+    let showsIndicators: Bool
+    /// 内容自然高度回报（desktop 理想高度计算用；底部钉住列表不需要，传 nil）
+    var onContentHeightChange: ((CGFloat) -> Void)?
+    @ViewBuilder var content: Content
+
+    @State private var minY: CGFloat = 0
+    @State private var containerHeight: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+
+    /// 上面还有被裁掉的内容（已向下滚动）
+    private var canScrollUp: Bool { minY < -4 }
+    /// 下面还有被裁掉的内容（内容底部超出可视区）
+    private var canScrollDown: Bool { contentHeight + minY > containerHeight + 4 }
+
+    var body: some View {
+        ScrollView {
+            content
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    contentHeight = $0
+                    onContentHeightChange?($0)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("fadingScroll")).minY } action: {
+                    minY = $0
+                }
+        }
+        .coordinateSpace(name: "fadingScroll")
+        .scrollIndicators(showsIndicators ? .automatic : .hidden)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { containerHeight = $0 }
+        .mask(fadeMask)
+    }
+
+    /// 渐隐开关做在渐变颜色上：mask 里 opacity(0) 会把区域整个抠掉（黑 = 完全显示，透明 = 隐藏）。
+    private var fadeMask: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [canScrollUp ? .clear : .black, .black],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 12)
+            Color.black
+            LinearGradient(
+                colors: [.black, canScrollDown ? .clear : .black],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 12)
+        }
+        .animation(.easeInOut(duration: 0.15), value: canScrollUp)
+        .animation(.easeInOut(duration: 0.15), value: canScrollDown)
     }
 }
 
