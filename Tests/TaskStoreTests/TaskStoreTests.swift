@@ -83,6 +83,112 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertNil(try store.task(id: task.id!)?.dueDate)
     }
 
+    // MARK: - 手动焦点（focus_pinned）
+
+    func testFocusPinnedDefaultsToFalse() throws {
+        let task = try store.createTask(title: "t", at: now)
+        XCTAssertFalse(task.focusPinned)
+        XCTAssertEqual(try store.task(id: task.id!)?.focusPinned, false)
+    }
+
+    func testSetFocusPinnedTogglesAndLogs() throws {
+        let task = try store.createTask(title: "t", at: now)
+        let later = now.addingTimeInterval(3600)
+        try store.setFocusPinned(task.id!, true, at: later)
+
+        var fetched = try store.task(id: task.id!)
+        XCTAssertEqual(fetched?.focusPinned, true)
+        XCTAssertEqual(fetched?.updatedAt, later)
+
+        let edited = try store.activity(forTaskId: task.id!).filter { $0.type == .edited }
+        XCTAssertEqual(edited.count, 1)
+        XCTAssertEqual(payloadDict(edited[0])?["fields"], "focus_pinned")
+
+        // 同值再设是 no-op；设回 false 再记一条
+        try store.setFocusPinned(task.id!, true, at: later.addingTimeInterval(60))
+        try store.setFocusPinned(task.id!, false, at: later.addingTimeInterval(120))
+        fetched = try store.task(id: task.id!)
+        XCTAssertEqual(fetched?.focusPinned, false)
+        XCTAssertEqual(try store.activity(forTaskId: task.id!).filter { $0.type == .edited }.count, 2)
+    }
+
+    // MARK: - 领域（工作/个人）
+
+    func testTaskAreaDefaultsToWork() throws {
+        let task = try store.createTask(title: "默认", at: now)
+        XCTAssertEqual(task.area, .work)
+        XCTAssertEqual(try store.task(id: task.id!)?.area, .work)
+    }
+
+    func testCreateTaskWithPersonalArea() throws {
+        let task = try store.createTask(title: "买菜", area: .personal, at: now)
+        XCTAssertEqual(try store.task(id: task.id!)?.area, .personal)
+    }
+
+    func testUpdateTaskAreaEditsAndLogs() throws {
+        let task = try store.createTask(title: "t", at: now)
+        let later = now.addingTimeInterval(3600)
+        try store.updateTask(id: task.id!, area: .personal, at: later)
+
+        let fetched = try store.task(id: task.id!)
+        XCTAssertEqual(fetched?.area, .personal)
+        XCTAssertEqual(fetched?.updatedAt, later)
+
+        let edited = try store.activity(forTaskId: task.id!).filter { $0.type == .edited }
+        XCTAssertEqual(edited.count, 1)
+        XCTAssertEqual(payloadDict(edited[0])?["fields"], "area")
+
+        // 同值再设是 no-op，不重复记日志
+        try store.updateTask(id: task.id!, area: .personal, at: later.addingTimeInterval(60))
+        XCTAssertEqual(try store.activity(forTaskId: task.id!).filter { $0.type == .edited }.count, 1)
+    }
+
+    func testExistingDatabaseMigratesAreaWithDefaultWork() throws {
+        // 模拟 v3 时代的旧库：先建库到 v3，塞一条任务，再迁移到最新
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "bbboard-migration-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var migrator = DatabaseMigrator()
+        migrator.registerMigration("v1_schema") { db in
+            try db.create(table: "tasks") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("title", .text).notNull()
+                t.column("status", .text).notNull()
+                t.column("source", .text).notNull()
+                t.column("created_at", .datetime).notNull()
+                t.column("updated_at", .datetime).notNull()
+            }
+            // v2_indexes 依赖的表也要在（真实 v1 一次建齐五张表）
+            try db.create(table: "activity_log") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("task_id", .integer).notNull()
+                t.column("type", .text).notNull()
+                t.column("payload", .text)
+                t.column("created_at", .datetime).notNull()
+            }
+            try db.create(table: "focus_items") { t in
+                t.column("date", .date).notNull()
+                t.column("task_id", .integer).notNull()
+                t.column("reason", .text).notNull()
+                t.column("rank", .integer).notNull()
+            }
+        }
+        let legacyQueue = try DatabaseQueue(path: url.path(percentEncoded: false))
+        try migrator.migrate(legacyQueue, upTo: "v1_schema")
+        try legacyQueue.write { db in
+            try db.execute(
+                sql: "INSERT INTO tasks (title, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                arguments: ["旧任务", "today", "manual", now, now]
+            )
+        }
+
+        let migrated = try TaskStore.open(at: url)
+        let task = try XCTUnwrap(migrated.allTasks().first)
+        XCTAssertEqual(task.title, "旧任务")
+        XCTAssertEqual(task.area, .work)
+    }
+
     func testDeleteTask() throws {
         let task = try store.createTask(title: "删掉我", at: now)
         try store.deleteTask(id: task.id!)

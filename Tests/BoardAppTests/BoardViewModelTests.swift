@@ -243,4 +243,42 @@ final class BoardViewModelTests: XCTestCase {
         viewModel.addTask(title: "新任务", status: .backlog, dueDate: nil, waitingOn: nil)
         XCTAssertNil(viewModel.errorMessage)
     }
+
+    // MARK: - 手动焦点（设为焦点）
+
+    /// 钉住的卡进入 focusDisplayItems 且排在规则焦点前；完成后自动隐藏；取消后消失。
+    func testToggleFocusPinnedControlsDisplayItems() async throws {
+        viewModel.addTask(title: "手动焦点卡", status: .doing, dueDate: nil, waitingOn: nil)
+        await waitUntil("任务出现") { !self.viewModel.tasks(in: .doing).isEmpty }
+        let task = try XCTUnwrap(viewModel.tasks(in: .doing).first)
+        XCTAssertFalse(viewModel.focusDisplayItems.contains { $0.taskId == task.id })
+
+        viewModel.toggleFocusPinned(task)
+        await waitUntil("钉住的卡进入 FOCUS") {
+            self.viewModel.focusDisplayItems.contains { $0.taskId == task.id }
+        }
+        let pinned = try XCTUnwrap(viewModel.focusDisplayItems.first { $0.taskId == task.id })
+        XCTAssertEqual(pinned.reason, "手动置顶")
+        // 钉住的排在最前
+        XCTAssertEqual(viewModel.focusDisplayItems.first?.taskId, task.id)
+
+        // 完成后自动隐藏（标志保留，恢复时回到 FOCUS）
+        let pinnedTask = try XCTUnwrap(viewModel.tasks.first { $0.id == task.id })
+        viewModel.toggleDone(pinnedTask)
+        await waitUntil("完成后从 FOCUS 隐藏") {
+            !self.viewModel.focusDisplayItems.contains { $0.taskId == task.id }
+        }
+
+        // 恢复回 doing → 重新出现；再取消焦点 → 消失
+        let doneTask = try XCTUnwrap(viewModel.tasks.first { $0.id == task.id })
+        viewModel.toggleDone(doneTask)
+        await waitUntil("恢复后回到 FOCUS") {
+            self.viewModel.focusDisplayItems.contains { $0.taskId == task.id }
+        }
+        let restored = try XCTUnwrap(viewModel.tasks.first { $0.id == task.id })
+        viewModel.toggleFocusPinned(restored)
+        await waitUntil("取消焦点后消失") {
+            !self.viewModel.focusDisplayItems.contains { $0.taskId == task.id }
+        }
+    }
 }

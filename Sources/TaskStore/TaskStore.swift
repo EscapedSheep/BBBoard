@@ -93,6 +93,16 @@ public final class TaskStore: Sendable {
             }
             try db.create(index: "tasks_parent_id", on: "tasks", columns: ["parent_id"], ifNotExists: true)
         }
+        migrator.registerMigration("v4_task_area") { db in
+            try db.alter(table: "tasks") { t in
+                t.add(column: "area", .text).notNull().defaults(to: TaskArea.work.rawValue)
+            }
+        }
+        migrator.registerMigration("v5_focus_pinned") { db in
+            try db.alter(table: "tasks") { t in
+                t.add(column: "focus_pinned", .boolean).notNull().defaults(to: false)
+            }
+        }
         return migrator
     }()
 
@@ -102,6 +112,7 @@ public final class TaskStore: Sendable {
     public func createTask(
         title: String,
         status: TaskStatus = .today,
+        area: TaskArea = .work,
         dueDate: Date? = nil,
         waitingOn: String? = nil,
         note: String? = nil,
@@ -114,6 +125,8 @@ public final class TaskStore: Sendable {
             title: title,
             note: note,
             status: status,
+            area: area,
+            focusPinned: false,
             projectId: nil,
             parentId: parentId,
             dueDate: dueDate,
@@ -145,6 +158,7 @@ public final class TaskStore: Sendable {
         clearDueDate: Bool = false,
         waitingOn: String? = nil,
         clearWaitingOn: Bool = false,
+        area: TaskArea? = nil,
         at now: Date = Date()
     ) throws {
         try dbQueue.write { db in
@@ -157,6 +171,7 @@ public final class TaskStore: Sendable {
             else if clearDueDate, task.dueDate != nil { task.dueDate = nil; fields.append("due_date") }
             if let waitingOn, waitingOn != task.waitingOn { task.waitingOn = waitingOn; fields.append("waiting_on") }
             else if clearWaitingOn, task.waitingOn != nil { task.waitingOn = nil; fields.append("waiting_on") }
+            if let area, area != task.area { task.area = area; fields.append("area") }
             guard !fields.isEmpty else { return }
             task.updatedAt = now
             try task.update(db)
@@ -192,6 +207,20 @@ public final class TaskStore: Sendable {
             if status == .done {
                 try Self.log(db, taskId: id, type: .completed, payload: nil, at: now)
             }
+        }
+    }
+
+    /// 钉进/移出 FOCUS 区（手动焦点，跨天保持）。同值调用是 no-op；
+    /// 有变化时同事务更新 updated_at 并记一条 edited 日志（fields 含 focus_pinned）。
+    public func setFocusPinned(_ id: Int64, _ pinned: Bool, at now: Date = Date()) throws {
+        try dbQueue.write { db in
+            guard var task = try Task.fetchOne(db, id: id) else { throw TaskStoreError.taskNotFound(id) }
+            guard task.focusPinned != pinned else { return }
+            task.focusPinned = pinned
+            task.updatedAt = now
+            try task.update(db)
+            let payload = Self.jsonPayload(["fields": "focus_pinned"])
+            try Self.log(db, taskId: id, type: .edited, payload: payload, at: now)
         }
     }
 

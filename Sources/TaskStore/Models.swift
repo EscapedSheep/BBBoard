@@ -11,6 +11,19 @@ public enum TaskSource: String, Codable, Sendable, DatabaseValueConvertible {
     case cleanup
 }
 
+/// 任务所属领域：工作 / 个人。看板列内按此分组展示。
+public enum TaskArea: String, Codable, Sendable, DatabaseValueConvertible, CaseIterable {
+    case work
+    case personal
+
+    public var displayName: String {
+        switch self {
+        case .work: "工作"
+        case .personal: "个人"
+        }
+    }
+}
+
 /// activity_log 的事件类型。
 public enum ActivityType: String, Codable, Sendable, DatabaseValueConvertible {
     case created
@@ -27,6 +40,9 @@ public struct Task: Codable, FetchableRecord, MutablePersistableRecord, Identifi
     public var title: String
     public var note: String?
     public var status: TaskStatus
+    public var area: TaskArea
+    /// 手动钉进 FOCUS 区（跨天保持，直到取消或完成）；规则选出的每日 Focus 不受影响。
+    public var focusPinned: Bool
     public var projectId: Int64?
     /// 父任务 id（nil = 顶层任务）。子任务嵌套在父卡下展示，不参与看板列/Focus/建议。
     public var parentId: Int64?
@@ -41,7 +57,8 @@ public struct Task: Codable, FetchableRecord, MutablePersistableRecord, Identifi
     public static let databaseTableName = "tasks"
 
     enum CodingKeys: String, CodingKey {
-        case id, title, note, status, source
+        case id, title, note, status, area, source
+        case focusPinned = "focus_pinned"
         case projectId = "project_id"
         case parentId = "parent_id"
         case dueDate = "due_date"

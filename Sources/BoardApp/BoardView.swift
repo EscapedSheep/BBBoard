@@ -22,6 +22,7 @@ struct BoardView: View {
 
     @State private var newTitle = ""
     @State private var newStatus: TaskStatus = .today
+    @State private var newArea: TaskArea = .work
     @State private var hasDueDate = false
     @State private var newDueDate = Date()
     @State private var editingTaskID: Int64?
@@ -165,11 +166,11 @@ struct BoardView: View {
                     })
                 if isCompact {
                     // 紧凑态可选常驻 FOCUS 区（AppSettings 开关，菜单栏可切），纯展示
-                    if viewModel.settings.focusPinnedInCompact, !viewModel.focusItems.isEmpty {
+                    if viewModel.settings.focusPinnedInCompact, !viewModel.focusDisplayItems.isEmpty {
                         focusSection
                     }
                 } else {
-                    if !viewModel.focusItems.isEmpty {
+                    if !viewModel.focusDisplayItems.isEmpty {
                         focusSection
                     }
                     if !viewModel.suggestions.isEmpty {
@@ -302,9 +303,13 @@ struct BoardView: View {
 
     // MARK: - Daily Focus
 
-    /// FOCUS 区：Top 3 + 主因标签。纯展示（点击挪 DOING 容易误触；改状态用拖拽或菜单）。
+    /// FOCUS 区：手动钉住的卡 + 规则选出的 Top N。展开态永远分两列（工作左、个人右，
+    /// 空侧占位），紧凑态保持单列。纯展示（点击挪 DOING 容易误触；改状态用拖拽或菜单）。
     private var focusSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let workItems = viewModel.focusDisplayItems.filter { focusArea(of: $0) == .work }
+        let personalItems = viewModel.focusDisplayItems.filter { focusArea(of: $0) == .personal }
+        let splitByArea = !isCompact
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 5) {
                 Image(systemName: "flame")
                     .font(.system(size: 9))
@@ -318,37 +323,80 @@ struct BoardView: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 2)
 
-            ForEach(viewModel.focusItems) { item in
-                HStack(spacing: 8) {
-                    // 与任务卡同款"字形 + 天数环"；任务已消失则回退纯字形
-                    if let task = viewModel.tasks.first(where: { $0.id == item.taskId }) {
-                        statusGlyphWithRing(task, ringSize: 20, glyphSize: 11)
-                    } else {
-                        Image(systemName: glyph(for: .today))
-                            .font(.system(size: 13))
-                            .foregroundStyle(accent(for: .today))
-                            .frame(width: 16, height: 16)
-                    }
-                    Text(item.taskTitle)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(item.reason)
-                        .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.red.opacity(0.10))
-                        .foregroundStyle(.red)
-                        .clipShape(Capsule())
+            if splitByArea {
+                HStack(alignment: .top, spacing: 8) {
+                    focusColumn(area: .work, items: workItems)
+                    focusColumn(area: .personal, items: personalItems)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+            } else {
+                ForEach(viewModel.focusDisplayItems) { item in
+                    focusRow(item)
+                }
             }
         }
         .padding(10)
         .background(Color.red.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
+    }
+
+    /// Focus 条目的领域：按 taskId 查任务，任务已消失时回退工作（占位行不受影响）。
+    private func focusArea(of item: FocusItem) -> TaskArea {
+        viewModel.tasks.first(where: { $0.id == item.taskId })?.area ?? .work
+    }
+
+    /// FOCUS 单列（两列布局用）：小领域标头 + 条目列表。
+    private func focusColumn(area: TaskArea, items: [FocusItem]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: area == .work ? "briefcase" : "house")
+                    .font(.system(size: 8))
+                Text(area.displayName)
+                    .font(.caption2.weight(.medium))
+                    .tracking(0.6)
+            }
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 8)
+            if items.isEmpty {
+                // 该领域今天没有焦点条目：安静占位，保持两列结构稳定
+                Text("无焦点")
+                    .font(.caption)
+                    .foregroundStyle(.quaternary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+            ForEach(items) { item in
+                focusRow(item)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func focusRow(_ item: FocusItem) -> some View {
+        HStack(spacing: 8) {
+            // 与任务卡同款"字形 + 天数环"；任务已消失则回退纯字形
+            if let task = viewModel.tasks.first(where: { $0.id == item.taskId }) {
+                statusGlyphWithRing(task, ringSize: 20, glyphSize: 11)
+            } else {
+                Image(systemName: glyph(for: .today))
+                    .font(.system(size: 13))
+                    .foregroundStyle(accent(for: .today))
+                    .frame(width: 16, height: 16)
+            }
+            Text(item.taskTitle)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(item.reason)
+                .font(.caption2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.red.opacity(0.10))
+                .foregroundStyle(.red)
+                .clipShape(Capsule())
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 
     // MARK: - 建议区
@@ -424,6 +472,13 @@ struct BoardView: View {
                 .foregroundStyle(hasDueDate ? Color.orange : Color.secondary)
                 .help("设置截止日期")
 
+                Button { newArea = newArea == .work ? .personal : .work } label: {
+                    Image(systemName: newArea == .work ? "briefcase" : "house")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(newArea == .work ? Color.secondary : Color.teal)
+                .help("切换领域：\(newArea.displayName)")
+
                 Menu {
                     ForEach([TaskStatus.today, .doing, .waiting, .backlog], id: \.self) { status in
                         Button(status.displayName) { newStatus = status }
@@ -470,12 +525,14 @@ struct BoardView: View {
         viewModel.addTask(
             title: title,
             status: newStatus,
+            area: newArea,
             dueDate: hasDueDate ? newDueDate : nil,
             waitingOn: nil
         )
         newTitle = ""
         hasDueDate = false
         newStatus = .today
+        newArea = .work
         newTaskFieldFocused = true
     }
 
@@ -655,11 +712,31 @@ struct BoardView: View {
                     reportIdealHeight()
                 }
             ) {
+                let columnTasks = viewModel.tasks(in: status)
+                let workTasks = columnTasks.filter { $0.area == .work }
+                let personalTasks = columnTasks.filter { $0.area == .personal }
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(viewModel.tasks(in: status)) { task in
+                    ForEach(workTasks) { task in
                         taskRow(task)
                     }
-                    if viewModel.tasks(in: status).isEmpty {
+                    // 列内泳道：两组同时存在时用细分隔线标出个人区，单列独占时不加噪音
+                    if !workTasks.isEmpty, !personalTasks.isEmpty {
+                        HStack(spacing: 5) {
+                            Image(systemName: "house")
+                                .font(.system(size: 8))
+                            Text("个人")
+                                .font(.caption2.weight(.medium))
+                                .tracking(0.6)
+                        }
+                        .foregroundStyle(.quaternary)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 6)
+                        .padding(.bottom, 2)
+                    }
+                    ForEach(personalTasks) { task in
+                        taskRow(task)
+                    }
+                    if columnTasks.isEmpty {
                         Text("拖任务到这里")
                             .font(.caption2)
                             .foregroundStyle(.quaternary)
@@ -956,6 +1033,13 @@ struct BoardView: View {
                     }
                 }
                 Divider()
+                Button(task.area == .work ? "标记为个人" : "标记为工作") {
+                    viewModel.setArea(task, to: task.area == .work ? .personal : .work)
+                }
+                Button(task.focusPinned ? "取消焦点" : "设为焦点") {
+                    viewModel.toggleFocusPinned(task)
+                }
+                Divider()
                 Menu("截止时间…") {
                     Button("今天") { viewModel.setDueDate(task, to: Date()) }
                     Button("明天") { viewModel.setDueDate(task, to: Date().addingTimeInterval(86400)) }
@@ -1217,6 +1301,9 @@ struct BoardView: View {
     @ViewBuilder
     private func badges(for task: Task) -> some View {
         let progress = viewModel.subtaskProgress(of: task)
+        if task.focusPinned {
+            badge("焦点", color: .red)
+        }
         if let projectId = task.projectId, let name = viewModel.projectNames[projectId] {
             badge(name, color: .purple)
         }

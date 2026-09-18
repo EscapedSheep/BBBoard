@@ -92,6 +92,18 @@ final class BoardViewModel {
         recomputeFocus(topLevel)
     }
 
+    /// FOCUS 区实际展示：手动钉住的卡在前（最近钉的优先，完成的自动隐藏），
+    /// 后接规则选出的每日 Focus（剔除已钉住的，避免重复）。
+    var focusDisplayItems: [FocusItem] {
+        let pinned = topLevelTasks
+            .filter { $0.focusPinned && $0.status != .done }
+            .sorted { $0.updatedAt > $1.updatedAt }
+        let pinnedIDs = Set(pinned.compactMap(\.id))
+        return pinned.map {
+            FocusItem(taskId: $0.id ?? 0, taskTitle: $0.title, reason: "手动置顶", score: 0, rank: 0)
+        } + focusItems.filter { !pinnedIDs.contains($0.taskId) }
+    }
+
     // MARK: - Daily Focus
 
     /// 上次生成/复用快照的日期（startOfDay）；面板重新展示时比对，跨天则重算
@@ -143,10 +155,22 @@ final class BoardViewModel {
 
     // MARK: - 操作
 
-    func addTask(title: String, status: TaskStatus, dueDate: Date?, waitingOn: String?) {
+    func addTask(title: String, status: TaskStatus, area: TaskArea = .work, dueDate: Date?, waitingOn: String?) {
         perform("创建任务失败") {
-            try store.createTask(title: title, status: status, dueDate: dueDate, waitingOn: waitingOn)
+            try store.createTask(title: title, status: status, area: area, dueDate: dueDate, waitingOn: waitingOn)
         }
+    }
+
+    /// 切换任务领域（工作/个人），列内泳道分组随之变化。
+    func setArea(_ task: Task, to area: TaskArea) {
+        guard let id = task.id, area != task.area else { return }
+        perform("领域更新失败") { try store.updateTask(id: id, area: area) }
+    }
+
+    /// 钉进/移出 FOCUS 区（手动焦点，跨天保持直到取消或完成）。
+    func toggleFocusPinned(_ task: Task) {
+        guard let id = task.id else { return }
+        perform("焦点更新失败") { try store.setFocusPinned(id, !task.focusPinned) }
     }
 
     /// 添加子任务（挂在父卡下，状态 today，不进看板列）。
