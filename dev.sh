@@ -33,4 +33,10 @@ echo "▸ 替换二进制并重启"
 cp .build/debug/BoardApp "$BIN"
 codesign --force --sign - "$APP"
 open "$APP"
+
+echo "▸ 安装 CLI → ~/.local/bin/bbboard"
+mkdir -p "$HOME/.local/bin"
+cp .build/debug/BoardCLI "$HOME/.local/bin/bbboard"
+codesign --force --sign - "$HOME/.local/bin/bbboard" 2>/dev/null || true
+
 echo "✓ 已更新并重启"

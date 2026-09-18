@@ -34,6 +34,7 @@ final class BoardViewModel {
         self.store = store
         self.settings = settings
         observeTasks()
+        observeExternalChanges()
     }
 
     // MARK: - 展示数据
@@ -76,6 +77,25 @@ final class BoardViewModel {
                     try? await _Concurrency.Task.sleep(for: .seconds(1))
                 }
             }
+        }
+    }
+
+    /// bbboard CLI 等外部进程写库后，经分布式通知重载（GRDB 观察只覆盖本进程写入）。
+    private func observeExternalChanges() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: .bbboardExternalChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            _Concurrency.Task { @MainActor [weak self] in
+                self?.reloadAfterExternalChange()
+            }
+        }
+    }
+
+    private func reloadAfterExternalChange() {
+        do {
+            apply(tasks: try store.allTasks())
+        } catch {
+            NSLog("BoardApp: 外部变更重载失败: \(error)")
         }
     }
 

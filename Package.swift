@@ -27,6 +27,13 @@ let package = Package(
                 "TaskStore"
             ]
         ),
+        .executableTarget(
+            name: "BoardCLI",
+            dependencies: [
+                "RuleEngine",
+                "TaskStore"
+            ]
+        ),
         .testTarget(
             name: "RuleEngineTests",
             dependencies: ["RuleEngine"]
@@ -38,6 +45,10 @@ let package = Package(
         .testTarget(
             name: "BoardAppTests",
             dependencies: ["BoardApp"]
+        ),
+        .testTarget(
+            name: "BoardCLITests",
+            dependencies: ["BoardCLI"]
         )
     ]
 )

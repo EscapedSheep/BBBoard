@@ -9,6 +9,8 @@ public enum TaskSource: String, Codable, Sendable, DatabaseValueConvertible {
     case manual
     case braindump
     case cleanup
+    /// 经 bbboard 命令行写入（agent 场景）。
+    case cli
 }
 
 /// 任务所属领域：工作 / 个人。看板列内按此分组展示。

@@ -15,6 +15,22 @@ BBBoard 是 macOS 原生的常驻任务看板：以紧凑挂件形态挂在桌�
 - **说明与子任务** — 卡片备注、嵌套子任务与进度徽标（2/5）。
 - **Peek 面板** — ⌥Space 全局快捷键随时呼出，全屏 App 之上也可用。
 - **纯本地** — 全部数据在本地 SQLite（GRDB），完整活动日志。无账号、无云同步。
+- **命令行（bbboard）** — 终端/AI agent 直接读写看板，App 实时刷新。
+
+## 命令行（bbboard）
+
+构建后得到 `BoardCLI` 可执行文件（`./dev.sh` / `./install.sh` 会安装为 `~/.local/bin/bbboard`）。
+适合把人或 AI agent 的工作落到看板上——比如给 agent 一张截图，让它自己把待办记上来：
+
+```bash
+bbboard list --json                                    # 当前看板（agent 友好）
+bbboard add "跟进 PRG 的 API key" --due 明天 --status waiting --waiting-on Peter
+bbboard move 12 doing                                  # 改状态
+bbboard done 12                                        # 完成
+```
+
+写操作与 App 同路径（TaskStore + activity_log），运行中的 App 通过分布式通知实时刷新。
+`--due` 复用看板的规则日期解析（今天/明天/下周X/9月20日/9/20/2026-09-20…）；`--db` 可指定数据库路径。
 
 ## 环境要求
 
@@ -44,6 +60,7 @@ codesign --force --sign - ~/Applications/BBBoard.app
 
 ```
 BoardApp        macOS App：桌面挂件（AppKit NSPanel）、Peek 面板、全局快捷键、SwiftUI 视图
+BoardCLI        bbboard 命令行：终端/agent 读写看板（与 App 同库，写后广播通知 App 刷新）
   ├─ RuleEngine 纯函数：截止/等待/停滞规则 + Focus 打分 + Brain Dump/日期解析 + 重复检测，全单测
   └─ TaskStore  GRDB/SQLite：迁移、CRUD、activity_log、Focus 快照、corrections
 ```
@@ -56,7 +73,7 @@ BoardApp        macOS App：桌面挂件（AppKit NSPanel）、Peek 面板、全
 ## 测试
 
 ```bash
-swift test    # 140 个测试：规则引擎、日期解析、Brain Dump 解析器、存储层
+swift test    # 159 tests: rule engine, date resolver, brain-dump parser, store, CLI
 ```
 
 ## 许可证

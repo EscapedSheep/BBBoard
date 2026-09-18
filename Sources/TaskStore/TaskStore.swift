@@ -6,6 +6,12 @@ public enum TaskStoreError: Error, Equatable {
     case taskNotFound(Int64)
 }
 
+extension Notification.Name {
+    /// 外部进程（bbboard CLI）写库后广播的分布式通知；App 收到后重载任务
+    /// （GRDB 的 ValueObservation 只覆盖本进程写入，跨进程变更必须显式重取）。
+    public static let bbboardExternalChange = Notification.Name("dev.bbboard.externalChange")
+}
+
 /// GRDB 封装：迁移、CRUD、状态流转、activity_log、数据库观察。
 public final class TaskStore: Sendable {
     public let dbQueue: DatabaseQueue
@@ -21,12 +27,15 @@ public final class TaskStore: Sendable {
     }
 
     /// 打开（必要时创建）指定路径的数据库文件。
+    /// busy 超时容忍 App 与 bbboard CLI 双进程并发写（WAL 下写写互斥，等几秒而非立刻报错）。
     public static func open(at url: URL) throws -> TaskStore {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        return try TaskStore(dbQueue: DatabaseQueue(path: url.path(percentEncoded: false)))
+        var configuration = Configuration()
+        configuration.busyMode = .timeout(5)
+        return try TaskStore(dbQueue: DatabaseQueue(path: url.path(percentEncoded: false), configuration: configuration))
     }
 
     /// 默认库路径：~/Library/Application Support/BBBoard/board.sqlite

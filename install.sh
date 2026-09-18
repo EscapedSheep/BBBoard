@@ -45,6 +45,11 @@ fi
 cp .build/release/BoardApp "$BIN"
 codesign --force --sign - "$APP"
 
+echo "▸ 安装 CLI → ~/.local/bin/bbboard"
+mkdir -p "$HOME/.local/bin"
+cp .build/release/BoardCLI "$HOME/.local/bin/bbboard"
+codesign --force --sign - "$HOME/.local/bin/bbboard" 2>/dev/null || true
+
 echo "▸ 启动新版"
 open "$APP"
 echo "✓ 安装完成"

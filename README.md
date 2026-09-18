@@ -15,6 +15,22 @@ BBBoard is a macOS-native ambient task board: it hangs on your desktop as a comp
 - **Notes & subtasks** — per-card notes, nested subtasks with progress badges (2/5).
 - **Peek panel** — ⌥Space global hotkey summons the same board anywhere, even over fullscreen apps.
 - **Local-first** — everything in a local SQLite database (GRDB), full activity log. No account, no cloud.
+- **CLI (bbboard)** — read/write the board from the terminal or an AI agent; the app refreshes live.
+
+## CLI (bbboard)
+
+Building produces a `BoardCLI` executable (`./dev.sh` / `./install.sh` install it as `~/.local/bin/bbboard`).
+Handy for letting a person or an AI agent put work on the board — e.g. hand an agent a screenshot and let it record the to-dos itself:
+
+```bash
+bbboard list --json                                    # current board (agent-friendly)
+bbboard add "Follow up PRG API key" --due 明天 --status waiting --waiting-on Peter
+bbboard move 12 doing                                  # change status
+bbboard done 12                                        # complete
+```
+
+Writes go through the same path as the app (TaskStore + activity_log); a running app refreshes via a distributed notification.
+`--due` reuses the board's rule-based date parser (今天/明天/next Friday/9月20日/9/20/2026-09-20…); `--db` overrides the database path.
 
 ## Requirements
 
@@ -44,6 +60,7 @@ codesign --force --sign - ~/Applications/BBBoard.app
 
 ```
 BoardApp        macOS app: desktop widget (AppKit NSPanel), peek panel, hotkey, SwiftUI views
+BoardCLI        bbboard CLI: read/write the board from terminal/agents (same database; notifies the app to refresh)
   ├─ RuleEngine Pure functions: deadline/waiting/staleness rules + focus scoring + brain-dump/date parsing + duplicate detection. Fully unit-tested.
   └─ TaskStore  GRDB/SQLite: migrations, CRUD, activity log, focus snapshots, corrections
 ```
@@ -56,7 +73,7 @@ Design principles:
 ## Tests
 
 ```bash
-swift test    # 140 tests: rule engine, date resolver, brain-dump parser, store
+swift test    # 159 tests: rule engine, date resolver, brain-dump parser, store, CLI
 ```
 
 ## License
